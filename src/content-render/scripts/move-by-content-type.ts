@@ -26,6 +26,11 @@ const contentTypeToDir = (contentType: string): string => {
 
 const validContentTypeDirs = new Set(CONTENT_TYPES.map(contentTypeToDir))
 
+function isWithin(directory: string, candidate: string): boolean {
+  const relative = path.relative(directory, candidate)
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
 // Helper: Should we skip this index.md file from processing?
 function shouldSkipIndexFile(filePath: string): boolean {
   const relativePath = path.relative(process.cwd(), filePath)
@@ -89,17 +94,22 @@ program
     // 1. GATHER FILES
     // ====================
     const filesToProcess: string[] = []
+    const contentRoot = path.resolve('content')
+    const cleanupRoots: string[] = []
     if (paths?.length > 0) {
       for (const p of paths) {
         const stats = await fs.stat(p)
         if (stats.isDirectory()) {
+          cleanupRoots.push(path.resolve(p))
           filesToProcess.push(...(await walkFiles(p, ['.md'])))
         } else if (p.endsWith('.md')) {
+          cleanupRoots.push(path.dirname(path.resolve(p)))
           filesToProcess.push(p)
         }
       }
     } else {
-      filesToProcess.push(...(await walkFiles(path.join(process.cwd(), 'content'), ['.md'])))
+      cleanupRoots.push(contentRoot)
+      filesToProcess.push(...(await walkFiles(contentRoot, ['.md'])))
     }
 
     console.log(chalk.white(`Processing ${filesToProcess.length} files...\n`))
@@ -343,6 +353,8 @@ contentType: ${placeholderContentType}
     console.log(chalk.white('\nMoving files...\n'))
 
     const moved: Array<{ file: string; from: string; to: string }> = []
+    const removedSources = new Set<string>()
+    let moveFailed = false
 
     // Categorize files by type for correct move order
     const regularFiles = filesToMove.filter((f) => path.basename(f.filePath) !== 'index.md')
@@ -387,6 +399,7 @@ contentType: ${placeholderContentType}
 
         console.log(chalk.green(`✓ Copied ${path.relative(process.cwd(), file.filePath)}`))
       } catch (error) {
+        moveFailed = true
         skipped.push({
           file: path.relative(process.cwd(), file.filePath),
           reason: `Error: ${error}`,
@@ -415,8 +428,10 @@ contentType: ${placeholderContentType}
         )
 
         moved.push({ file: relativeFilePath, from: relativeFilePath, to: relativeTargetPath })
+        removedSources.add(file.filePath)
         console.log(chalk.green(`✓ Moved ${relativeFilePath}`))
       } catch (error) {
+        moveFailed = true
         skipped.push({
           file: path.relative(process.cwd(), file.filePath),
           reason: `Error: ${error}`,
@@ -431,8 +446,10 @@ contentType: ${placeholderContentType}
     for (const sourcePath of indexFilesToDeleteLater) {
       try {
         await fs.unlink(sourcePath)
+        removedSources.add(sourcePath)
         console.log(chalk.gray(`✓ Deleted source ${path.relative(process.cwd(), sourcePath)}`))
       } catch (error) {
+        moveFailed = true
         console.log(chalk.yellow(`⚠ Could not delete ${sourcePath}: ${error}`))
       }
     }
@@ -443,6 +460,7 @@ contentType: ${placeholderContentType}
         await fs.mkdir(file.targetDir, { recursive: true })
         await fs.copyFile(file.filePath, file.targetPath)
         await fs.unlink(file.filePath)
+        removedSources.add(file.filePath)
 
         moved.push({
           file: path.relative(process.cwd(), file.filePath),
@@ -452,6 +470,7 @@ contentType: ${placeholderContentType}
 
         console.log(chalk.green(`✓ Moved ${path.relative(process.cwd(), file.filePath)}`))
       } catch (error) {
+        moveFailed = true
         skipped.push({
           file: path.relative(process.cwd(), file.filePath),
           reason: `Error: ${error}`,
@@ -469,35 +488,41 @@ contentType: ${placeholderContentType}
       chalk.white('\nCleaning up old directories and updating parent index.md files...\n'),
     )
 
-    const deletedByProduct = new Map<string, string[]>()
+    const deletedDirs = new Set<string>()
+    if (moveFailed) {
+      console.log(chalk.yellow('⚠ Skipping directory cleanup because a move failed'))
+    } else {
+      const candidates = new Set<string>()
+      for (const source of removedSources) {
+        const sourceDir = path.dirname(path.resolve(source))
+        if (!isWithin(contentRoot, sourceDir)) continue
+        const [product, legacyDir] = path.relative(contentRoot, sourceDir).split(path.sep)
+        if (!legacyDir || validContentTypeDirs.has(legacyDir)) continue
 
-    for (const productDir of productDirs) {
-      const productName = path.basename(productDir)
-
-      try {
-        const entries = await fs.readdir(productDir, { withFileTypes: true })
-
-        for (const entry of entries) {
-          if (entry.isDirectory() && !validContentTypeDirs.has(entry.name)) {
-            const oldDirPath = path.join(productDir, entry.name)
-
-            try {
-              await fs.rm(oldDirPath, { recursive: true, force: true })
-              console.log(
-                chalk.gray(`✓ Deleted old directory: ${path.relative(process.cwd(), oldDirPath)}`),
-              )
-
-              if (!deletedByProduct.has(productName)) deletedByProduct.set(productName, [])
-              deletedByProduct.get(productName)!.push(`/${productName}/${entry.name}`)
-            } catch (error) {
-              console.log(chalk.yellow(`⚠ Could not delete ${oldDirPath}: ${error}`))
-            }
-          }
+        const legacyRoot = path.join(contentRoot, product, legacyDir)
+        for (let dir = sourceDir; isWithin(legacyRoot, dir); dir = path.dirname(dir)) {
+          if (!cleanupRoots.some((root) => isWithin(root, dir))) break
+          candidates.add(dir)
         }
-      } catch (error) {
-        console.log(chalk.yellow(`⚠ Could not read product directory ${productDir}: ${error}`))
       }
 
+      // Try descendants first. rmdir refuses nonempty directories, even if files appear during cleanup.
+      for (const dir of [...candidates].sort((a, b) => b.length - a.length)) {
+        try {
+          if ((await fs.realpath(dir)) !== dir) continue
+          await fs.rmdir(dir)
+          deletedDirs.add(dir)
+          console.log(chalk.gray(`✓ Deleted old directory: ${path.relative(process.cwd(), dir)}`))
+        } catch (error) {
+          const { code } = error as NodeJS.ErrnoException
+          if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && code !== 'ENOENT') {
+            console.log(chalk.yellow(`⚠ Could not delete ${dir}: ${error}`))
+          }
+        }
+      }
+    }
+
+    for (const productDir of productDirs) {
       // Update product index.md
       const productIndexPath = path.join(productDir, 'index.md')
       try {
@@ -515,13 +540,22 @@ contentType: ${placeholderContentType}
             if (targetDirs.has(dirPath)) newChildren.push(`/${ct}`)
           }
 
-          if (newChildren.length > 0) {
-            data.children = newChildren
+          const existingChildren = Array.isArray(data.children) ? data.children : []
+          const keptChildren = existingChildren.filter(
+            (child: unknown) =>
+              typeof child !== 'string' ||
+              (!deletedDirs.has(path.join(productDir, child)) &&
+                !newChildren.includes(child.startsWith('/') ? child : `/${child}`)),
+          )
+          if (newChildren.length > 0 || keptChildren.length !== existingChildren.length) {
+            data.children = [...new Set([...newChildren, ...keptChildren])]
             updated = true
           }
 
           // Add redirects for deleted directories
-          const deletedPaths = deletedByProduct.get(productName) || []
+          const deletedPaths = [...deletedDirs]
+            .filter((dir) => path.dirname(dir) === productDir)
+            .map((dir) => `/${path.basename(productDir)}/${path.basename(dir)}`)
           if (deletedPaths.length > 0) {
             if (!data.redirect_from) data.redirect_from = []
             else if (!Array.isArray(data.redirect_from)) data.redirect_from = [data.redirect_from]
