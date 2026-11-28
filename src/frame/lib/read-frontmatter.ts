@@ -1,4 +1,5 @@
 import matter from '@gr2m/gray-matter'
+import yaml, { type DumpOptions } from 'js-yaml'
 import type { SchemaObject, ErrorObject } from 'ajv'
 
 import { validateJson } from '@/tests/lib/validate-json-schema'
@@ -23,7 +24,15 @@ function readFrontmatter(markdown: string, opts: ReadFrontmatterOptions = {}) {
   let data
 
   try {
-    ;({ content, data } = matter(markdown))
+    // Match gray-matter's BOM and delimiter handling before it can select an engine.
+    const source = markdown.replace(/^\ufeff/, '')
+    if (source.startsWith('---') && !source.startsWith('----')) {
+      const language = matter.language(source.slice(3)).name.toLowerCase()
+      if (language && language !== 'yaml' && language !== 'yml') {
+        throw new Error('Only YAML frontmatter is supported')
+      }
+    }
+    ;({ content, data } = matter(markdown, { language: 'yaml' }))
   } catch (e: unknown) {
     const defaultReason = 'invalid frontmatter entry'
 
@@ -96,10 +105,10 @@ function readFrontmatter(markdown: string, opts: ReadFrontmatterOptions = {}) {
   return { content, data, errors }
 }
 
-// Expose gray-matter's underlying stringify method for joining a parsed
-// frontmatter object and a markdown string back into a unified string
-//
-// stringify('some string', {some: 'frontmatter'})
-readFrontmatter.stringify = matter.stringify
+// The body has already been parsed and may itself start with a delimiter.
+readFrontmatter.stringify = (content: string, data: object, options?: DumpOptions) => {
+  const metadata = yaml.dump(data, options)
+  return metadata === '{}\n' ? content : `---\n${metadata}---\n${content}`
+}
 
 export default readFrontmatter
