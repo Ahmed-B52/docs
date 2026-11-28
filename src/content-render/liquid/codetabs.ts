@@ -1,34 +1,23 @@
 import { encode } from 'html-entities'
-import { TokenizationError, type TagToken, type TopLevelToken } from 'liquidjs'
+import {
+  TokenizationError,
+  type TagToken,
+  type TopLevelToken,
+  type Context,
+  type Liquid,
+  type Template,
+} from 'liquidjs'
 
 import { codeLanguages } from '@/code-tabs/lib/languages'
 
-interface LiquidTemplate {
-  [key: string]: unknown
-}
-
-interface LiquidStream {
-  on(event: string, callback: (template?: LiquidTemplate) => void): LiquidStream
-  stop(): void
-  start(): void
-}
-
-interface LiquidEngine {
-  parser: {
-    parseStream(tokens: TopLevelToken[]): LiquidStream
-  }
-  renderer: {
-    renderTemplates(templates: LiquidTemplate[], scope: Record<string, unknown>): string
-  }
-  parseAndRender(template: string, context: Record<string, string>): string
-}
+import { renderNestedLiquid } from './render-nested'
 
 interface LiquidBlockTag {
   type: 'block'
-  templates: LiquidTemplate[]
-  liquid: LiquidEngine | null
+  templates: Template[]
+  liquid: Liquid | null
   parse(tagToken: TagToken, remainTokens: TopLevelToken[]): void
-  render(scope: Record<string, unknown>): Generator<unknown, unknown, unknown>
+  render(scope: Context): Generator<unknown, unknown, unknown>
 }
 
 const codeTabsTemplate = '<div class="ghd-codetabs">{{ output }}</div>\n'
@@ -51,9 +40,7 @@ function parseBlockTemplates(
   const stream = context.liquid!.parser.parseStream(remainTokens)
   stream
     .on(`tag:${endTagName}`, () => stream.stop())
-    .on('template', (template?: LiquidTemplate) => {
-      if (template) context.templates.push(template)
-    })
+    .on('template', (template: Template) => context.templates.push(template))
     .on('end', () => {
       throw new Error(`tag ${tagToken.getText()} not closed`)
     })
@@ -76,9 +63,9 @@ export const CodeTabs: LiquidBlockTag = {
     parseBlockTemplates(this, tagToken, remainTokens, 'endcodetabs')
   },
 
-  *render(scope: Record<string, unknown>): Generator<unknown, unknown, unknown> {
+  *render(scope: Context): Generator<unknown, unknown, unknown> {
     const output = yield this.liquid!.renderer.renderTemplates(this.templates, scope)
-    return yield this.liquid!.parseAndRender(codeTabsTemplate, { output })
+    return yield renderNestedLiquid(this.liquid!, codeTabsTemplate, scope, { output })
   },
 }
 
@@ -116,9 +103,9 @@ export const CodeTab: CodeTabTag = {
     parseBlockTemplates(this, tagToken, remainTokens, 'endcodetab')
   },
 
-  *render(scope: Record<string, unknown>): Generator<unknown, unknown, unknown> {
+  *render(scope: Context): Generator<unknown, unknown, unknown> {
     const output = yield this.liquid!.renderer.renderTemplates(this.templates, scope)
-    return yield this.liquid!.parseAndRender(codeTabTemplate, {
+    return yield renderNestedLiquid(this.liquid!, codeTabTemplate, scope, {
       languageKey: this.languageKey,
       label: this.label,
       output,

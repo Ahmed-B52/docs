@@ -1,5 +1,7 @@
+import type { Context, Liquid, TagToken, Template, TopLevelToken } from 'liquidjs'
 import { allTools } from '@/tools/lib/all-tools'
 import { allPlatforms } from '@/tools/lib/all-platforms'
+import { renderNestedLiquid } from './render-nested'
 
 export const tags: string[] = Object.keys(allTools).concat(allPlatforms).concat(['rowheaders'])
 
@@ -46,30 +48,26 @@ const template = '<div class="ghd-tool {{ tagName }}">{{ output }}</div>\n'
 export const Tool = {
   type: 'block' as const,
   tagName: '',
-  // Liquid template objects don't have TypeScript definitions
-  templates: [] as unknown[],
+  templates: [] as Template[],
+  liquid: null as Liquid | null,
 
-  // tagToken and remainTokens are Liquid internal types without TypeScript definitions
-  parse(tagToken: unknown, remainTokens: unknown) {
-    const token = tagToken as { name: string; getText: () => string }
-    this.tagName = token.name
+  parse(tagToken: TagToken, remainTokens: TopLevelToken[]) {
+    this.tagName = tagToken.name
     this.templates = []
 
-    const stream = this.liquid.parser.parseStream(remainTokens)
+    const stream = this.liquid!.parser.parseStream(remainTokens)
     stream
       .on(`tag:end${this.tagName}`, () => stream.stop())
-      // tpl is a Liquid template object without TypeScript definitions
-      .on('template', (tpl: unknown) => this.templates.push(tpl))
+      .on('template', (tpl: Template) => this.templates.push(tpl))
       .on('end', () => {
-        throw new Error(`tag ${token.getText()} not closed`)
+        throw new Error(`tag ${tagToken.getText()} not closed`)
       })
     stream.start()
   },
 
-  // scope is a Liquid scope object, Generator yields/returns Liquid template values - no TypeScript definitions available
-  *render(scope: unknown): Generator<unknown, unknown, unknown> {
-    const output = yield this.liquid.renderer.renderTemplates(this.templates, scope)
-    return yield this.liquid.parseAndRender(template, {
+  *render(scope: Context): Generator<unknown, unknown, unknown> {
+    const output = yield this.liquid!.renderer.renderTemplates(this.templates, scope)
+    return yield renderNestedLiquid(this.liquid!, template, scope, {
       tagName: this.tagName,
       output,
     })

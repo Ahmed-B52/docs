@@ -1,0 +1,44 @@
+diff --git a/node_modules/liquidjs/dist/liquid.node.js b/node_modules/liquidjs/dist/liquid.node.js
+index b33dcbf..b5d23a4 100644
+--- a/node_modules/liquidjs/dist/liquid.node.js
++++ b/node_modules/liquidjs/dist/liquid.node.js
+@@ -1332,10 +1332,13 @@ function evalQuotedToken(token) {
+     return token.content;
+ }
+ function* evalRangeToken(token, ctx) {
+-    const low = yield evalToken(token.lhs, ctx);
+-    const high = yield evalToken(token.rhs, ctx);
+-    ctx.memoryLimit.use(high - low + 1);
+-    return range(+low, +high + 1);
++    const low = +(yield evalToken(token.lhs, ctx));
++    const stop = +(yield evalToken(token.rhs, ctx)) + 1;
++    if (!(low < stop)) return [];
++    // A unit increment must advance every iteration of range().
++    assert(low >= Number.MIN_SAFE_INTEGER && stop <= Number.MAX_SAFE_INTEGER + 1, 'numeric range bounds exceeded');
++    ctx.memoryLimit.use(Math.ceil(stop - low));
++    return range(low, stop);
+ }
+ function* toPostfix(tokens) {
+     const ops = [];
+diff --git a/node_modules/liquidjs/dist/liquid.node.mjs b/node_modules/liquidjs/dist/liquid.node.mjs
+index 8a4337e..8bbfc3d 100644
+--- a/node_modules/liquidjs/dist/liquid.node.mjs
++++ b/node_modules/liquidjs/dist/liquid.node.mjs
+@@ -1372,10 +1372,13 @@ function evalQuotedToken(token) {
+     return token.content;
+ }
+ function* evalRangeToken(token, ctx) {
+-    const low = yield evalToken(token.lhs, ctx);
+-    const high = yield evalToken(token.rhs, ctx);
+-    ctx.memoryLimit.use(high - low + 1);
+-    return range(+low, +high + 1);
++    const low = +(yield evalToken(token.lhs, ctx));
++    const stop = +(yield evalToken(token.rhs, ctx)) + 1;
++    if (!(low < stop)) return [];
++    // A unit increment must advance every iteration of range().
++    assert(low >= Number.MIN_SAFE_INTEGER && stop <= Number.MAX_SAFE_INTEGER + 1, 'numeric range bounds exceeded');
++    ctx.memoryLimit.use(Math.ceil(stop - low));
++    return range(low, stop);
+ }
+ function* toPostfix(tokens) {
+     const ops = [];
