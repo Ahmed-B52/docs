@@ -23,6 +23,7 @@ runs:
       with:
         repository: github/docs-early-access
         token: ${{ inputs.token }}
+        persist-credentials: false
         path: docs-early-access
         ref: ${{ steps.check-early-access.outputs.branch }}
 
