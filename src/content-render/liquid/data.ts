@@ -1,6 +1,7 @@
 import { TokenizationError } from 'liquidjs'
-import type { TagToken, Liquid, Template } from 'liquidjs'
+import type { TagToken, Liquid, Context } from 'liquidjs'
 
+import { indentLiquidText, renderNestedLiquid } from './render-nested'
 import { THROW_ON_EMPTY, DataReferenceError } from './error-handling'
 import { getDataByLanguage } from '@/data-directory/lib/get-data'
 import { createLogger } from '@/observability/logger'
@@ -10,21 +11,12 @@ const logger = createLogger(import.meta.url)
 const Syntax = /([a-z0-9/\\_.\-[\]]+)/i
 const SyntaxHelp = "Syntax Error in 'data' - Valid syntax: data [path]"
 
-// Using unknown for scope because it has custom environments property not in Liquid's Scope type
-interface CustomScope {
-  environments: {
-    currentLanguage?: string
-    [key: string]: unknown
-  }
-  [key: string]: unknown
-}
-
 interface DataTag {
   path: string
   tagToken: TagToken
   liquid: Liquid
   parse(tagToken: TagToken): void
-  render(scope: CustomScope): Promise<Template | undefined>
+  render(scope: Context): Promise<string | undefined>
 }
 
 export default {
@@ -37,10 +29,11 @@ export default {
     this.tagToken = tagToken
   },
 
-  async render(scope: CustomScope) {
-    let text = getDataByLanguage(this.path, scope.environments.currentLanguage || '')
+  async render(scope: Context) {
+    const { currentLanguage } = scope.environments as { currentLanguage?: string }
+    let text = getDataByLanguage(this.path, currentLanguage || '')
     if (text === undefined) {
-      if (scope.environments.currentLanguage === 'en') {
+      if (currentLanguage === 'en') {
         const message = `Can't find the key 'data ${this.path}' in the scope.`
         if (THROW_ON_EMPTY) {
           throw new DataReferenceError(message)
@@ -51,14 +44,14 @@ export default {
     }
     text = text.trim()
 
-    text = handleIndent(this.tagToken, text)
+    text = handleIndent(this.tagToken, text, scope)
     text = handleBlockquote(this.tagToken, text)
 
-    return this.liquid.parseAndRender(text, scope.environments)
+    return renderNestedLiquid(this.liquid, text, scope)
   },
 } as DataTag
 
-function handleIndent(tagToken: TagToken, text: string): string {
+function handleIndent(tagToken: TagToken, text: string, scope: Context): string {
   // Any time what we're about to replace in here has more than one line,
   // if the use of `{% data ... %}` was itself indented, from the left,
   // keep *that* indentation, in replaced output, for every line.
@@ -80,7 +73,7 @@ function handleIndent(tagToken: TagToken, text: string): string {
   const goBack = input.slice(begin - i, begin)
   if (goBack.charAt(0) === '\n' && goBack.length > 1) {
     const numSpaces = goBack.length - 1
-    return text.replace(/^/gm, ' '.repeat(numSpaces)).trim()
+    return indentLiquidText(text, numSpaces, scope).trim()
   }
   return text
 }

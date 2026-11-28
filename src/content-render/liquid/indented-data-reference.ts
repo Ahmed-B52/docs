@@ -1,18 +1,12 @@
 import assert from 'assert'
 
-import { type TagToken, type Liquid } from 'liquidjs'
+import { type TagToken, type Liquid, type Context } from 'liquidjs'
+import { indentLiquidText, renderNestedLiquid } from './render-nested'
 import { THROW_ON_EMPTY, IndentedDataReferenceError } from './error-handling'
 import { getDataByLanguage } from '@/data-directory/lib/get-data'
 import { createLogger } from '@/observability/logger'
 
 const logger = createLogger(import.meta.url)
-
-interface LiquidScope {
-  environments: {
-    currentLanguage: string
-    [key: string]: unknown
-  }
-}
 
 // This class supports a tag that expects two parameters, a data reference and `spaces=NUMBER`:
 //
@@ -32,7 +26,7 @@ const IndentedDataReference = {
     this.markup = tagToken.args.trim()
   },
 
-  async render(scope: LiquidScope): Promise<string | undefined> {
+  async render(scope: Context): Promise<string | undefined> {
     // obfuscate first legit space, remove all other spaces, then restore legit space
     // this way we can support spaces=NUMBER as well as spaces = NUMBER
     const input = this.markup
@@ -48,12 +42,10 @@ const IndentedDataReference = {
     assert(parseInt(numSpaces) || numSpaces === '0', '"spaces=NUMBER" must include a number')
 
     // Get the referenced value from the context
-    const text: string | undefined = getDataByLanguage(
-      dataReference,
-      scope.environments.currentLanguage,
-    )
+    const { currentLanguage } = scope.environments as { currentLanguage: string }
+    const text = getDataByLanguage(dataReference, currentLanguage)
     if (text === undefined) {
-      if (scope.environments.currentLanguage === 'en') {
+      if (currentLanguage === 'en') {
         const message = `Can't find the key 'indented_data_reference ${dataReference}' in the scope.`
         if (THROW_ON_EMPTY) {
           throw new IndentedDataReferenceError(message)
@@ -64,9 +56,9 @@ const IndentedDataReference = {
     }
 
     // add spaces to each line
-    const renderedReferenceWithIndent: string = text.replace(/^/gm, ' '.repeat(parseInt(numSpaces)))
+    const renderedReferenceWithIndent: string = indentLiquidText(text, parseInt(numSpaces), scope)
 
-    return this.liquid.parseAndRender(renderedReferenceWithIndent, scope.environments)
+    return renderNestedLiquid(this.liquid!, renderedReferenceWithIndent, scope)
   },
 }
 

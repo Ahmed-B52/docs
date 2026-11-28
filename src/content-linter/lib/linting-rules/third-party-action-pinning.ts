@@ -1,9 +1,8 @@
-import { addError, filterTokens } from 'markdownlint-rule-helpers'
+import { addError } from 'markdownlint-rule-helpers'
 import yaml from 'js-yaml'
 
-import { liquid } from '@/content-render/index'
-import { allVersions } from '@/versions/lib/all-versions'
-import type { RuleParams, RuleErrorCallback, MarkdownToken, Rule } from '@/content-linter/types'
+import { getLintTokens, renderLintLiquid } from '../helpers/render-liquid'
+import type { RuleParams, RuleErrorCallback, Rule } from '@/content-linter/types'
 
 // Detects third-party actions in the format `owner/repo@ref`
 const actionRegex = /[\w-]+\/[\w-]+@[\w-]+/
@@ -35,24 +34,21 @@ export const thirdPartyActionPinning: Rule = {
   tags: ['feature', 'actions'],
   parser: 'markdownit',
   asynchronous: true,
-  function: (params: RuleParams, onError: RuleErrorCallback) => {
-    filterTokens(params, 'fence', async (token: MarkdownToken) => {
-      if (!token.info || !token.content) return
+  function: async (params: RuleParams, onError: RuleErrorCallback) => {
+    for (const token of getLintTokens(params, 'fence')) {
+      if (!token.info || !token.content) continue
       const lang = token.info.trim().split(/\s+/u).shift()?.toLowerCase()
-      if (lang !== 'yaml' && lang !== 'yml') return
-      if (!token.content.includes('steps:')) return
-      if (!token.content.includes('uses:')) return
+      if (lang !== 'yaml' && lang !== 'yml') continue
+      if (!token.content.includes('steps:')) continue
+      if (!token.content.includes('uses:')) continue
 
-      const context = {
-        currentLanguage: 'en',
-        currentVersionObj: allVersions['free-pro-team@latest'],
-      }
-      // If we don't parse the Liquid first, yaml loading chokes on {% raw %} tags
-      const renderedYaml = await liquid.parseAndRender(token.content, context)
+      // Render Liquid first so the YAML parser doesn't see tags like {% raw %}.
+      const renderedYaml = await renderLintLiquid(token.content, token.lineNumber, onError)
+      if (renderedYaml === undefined) continue
       try {
         const yamlObj = yaml.load(renderedYaml) as WorkflowYaml
         const steps = getWorkflowSteps(yamlObj)
-        if (!steps.some((step) => step.uses)) return
+        if (!steps.some((step) => step.uses)) continue
 
         for (const step of steps) {
           if (step.uses) {
@@ -80,7 +76,7 @@ export const thirdPartyActionPinning: Rule = {
           console.error('Error parsing YAML:', e)
         }
       }
-    })
+    }
   },
 }
 

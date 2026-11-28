@@ -1,9 +1,8 @@
 import yaml from 'js-yaml'
-import { addError, filterTokens } from 'markdownlint-rule-helpers'
+import { addError } from 'markdownlint-rule-helpers'
 
-import { liquid } from '@/content-render/index'
-import { allVersions } from '@/versions/lib/all-versions'
-import type { RuleParams, RuleErrorCallback, MarkdownToken, Rule } from '../../types'
+import { getLintTokens, renderLintLiquid } from '../helpers/render-liquid'
+import type { RuleParams, RuleErrorCallback, Rule } from '../../types'
 
 interface YamlSchedule {
   cron: string
@@ -24,24 +23,21 @@ export const yamlScheduledJobs: Rule = {
   tags: ['feature', 'actions'],
   parser: 'markdownit',
   asynchronous: true,
-  function: (params: RuleParams, onError: RuleErrorCallback) => {
-    filterTokens(params, 'fence', async (token: MarkdownToken) => {
-      if (!token.info) return
-      if (!token.content) return
+  function: async (params: RuleParams, onError: RuleErrorCallback) => {
+    for (const token of getLintTokens(params, 'fence')) {
+      if (!token.info) continue
+      if (!token.content) continue
       const lang = token.info.trim().split(/\s+/u).shift()?.toLowerCase()
-      if (lang !== 'yaml' && lang !== 'yml') return
-      if (!token.content.includes('schedule:')) return
-      if (!token.content.includes('- cron:')) return
+      if (lang !== 'yaml' && lang !== 'yml') continue
+      if (!token.content.includes('schedule:')) continue
+      if (!token.content.includes('- cron:')) continue
 
-      const context = {
-        currentLanguage: 'en',
-        currentVersionObj: allVersions['free-pro-team@latest'],
-      }
-      // If we don't parse the Liquid first, yaml loading chokes on {% raw %} tags
-      const renderedYaml = await liquid.parseAndRender(token.content, context)
+      // Render Liquid first so the YAML parser doesn't see tags like {% raw %}.
+      const renderedYaml = await renderLintLiquid(token.content, token.lineNumber, onError)
+      if (renderedYaml === undefined) continue
       const yamlObj = yaml.load(renderedYaml) as YamlWorkflow
-      if (!yamlObj.on) return
-      if (!yamlObj.on.schedule) return
+      if (!yamlObj.on) continue
+      if (!yamlObj.on.schedule) continue
 
       for (const schedule of yamlObj.on.schedule) {
         if (schedule.cron.split(' ')[0] === '0') {
@@ -64,7 +60,7 @@ export const yamlScheduledJobs: Rule = {
 
         scheduledYamlJobs.push(schedule.cron)
       }
-    })
+    }
   },
 }
 

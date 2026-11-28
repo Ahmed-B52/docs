@@ -1,16 +1,8 @@
 import { addError } from 'markdownlint-rule-helpers'
 import type { RuleParams, RuleErrorCallback } from '../../types'
 
-import { liquid } from '@/content-render/index'
-import { allVersions } from '@/versions/lib/all-versions'
-import { forEachInlineChild, getRange } from '../helpers/utils'
-
-interface ImageToken {
-  content: string
-  lineNumber: number
-  line: string
-  range: [number, number]
-}
+import { getLintTokens, renderLintLiquid } from '../helpers/render-liquid'
+import { getRange } from '../helpers/utils'
 
 export const incorrectAltTextLength = {
   names: ['GHD033', 'incorrect-alt-text-length'],
@@ -18,22 +10,19 @@ export const incorrectAltTextLength = {
   tags: ['accessibility', 'images'],
   parser: 'markdownit',
   asynchronous: true,
-  function: (params: RuleParams, onError: RuleErrorCallback) => {
-    forEachInlineChild(params, 'image', async function forToken(token: ImageToken) {
-      let renderedString = token.content
-
-      if (token.content.includes('{%') || token.content.includes('{{')) {
-        const context = {
-          currentLanguage: 'en',
-          currentVersionObj: allVersions['free-pro-team@latest'],
-        }
-        renderedString = await liquid.parseAndRender(token.content, context)
-      }
+  function: async (params: RuleParams, onError: RuleErrorCallback) => {
+    const images = getLintTokens(params, 'inline')
+      .flatMap((token) => token.children ?? [])
+      .filter((token) => token.type === 'image')
+    for (const token of images) {
+      const content = token.content ?? ''
+      const renderedString = await renderLintLiquid(content, token.lineNumber, onError)
+      if (renderedString === undefined) continue
 
       // You can't compute a range if the content is empty
       // because getRange() would throw an error. It's because it assumes to
       // be able to find one string in another string.
-      const range = token.content ? getRange(token.line, token.content) : null
+      const range = content ? getRange(token.line, content) : null
 
       if (renderedString.length < 40 || renderedString.length > 150) {
         addError(
@@ -45,6 +34,6 @@ export const incorrectAltTextLength = {
           null, // No fix possible
         )
       }
-    })
+    }
   },
 }
