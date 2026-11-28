@@ -25,16 +25,6 @@ type MainArgs = {
   baseSHA: string
   headSHA: string
 }
-
-function quoteFilename(filename: string) {
-  // Bash decodes these bytes inside one argument. Encode backticks and control
-  // characters too, so a filename cannot break or be changed by the Markdown fence.
-  const escaped = filename.replace(/[\\'`\p{Cc}]/gu, (char) =>
-    Array.from(Buffer.from(char), (byte) => `\\x${byte.toString(16).padStart(2, '0')}`).join(''),
-  )
-  return `$'${escaped}'`
-}
-
 async function main({ owner, repo, baseSHA, headSHA }: MainArgs) {
   const octokit = getOctokit(GITHUB_TOKEN as string)
   // get the list of file changes from the PR
@@ -62,7 +52,7 @@ async function main({ owner, repo, baseSHA, headSHA }: MainArgs) {
     if (status === 'removed') {
       // Bad
       oldFilenames.push(filename)
-    } else if (status === 'renamed' && file.previous_filename) {
+    } else if (status === 'renamed') {
       // Also bad
       const previousFilename = file.previous_filename
       oldFilenames.push(previousFilename)
@@ -78,10 +68,10 @@ async function main({ owner, repo, baseSHA, headSHA }: MainArgs) {
     "Even if you don't reference these assets anymore, as of this branch, please do not delete them.\n"
   markdown += 'They might still be referenced in translated content.\n'
   markdown += 'The weekly "Delete orphaned assets" workflow will clean those up.\n\n'
-  markdown += '**To *undo* these removals run this command in Bash:**\n\n'
+  markdown += '**To *undo* these removals run this command:**\n\n'
   markdown += `
-\`\`\`bash
-git --literal-pathspecs checkout origin/main -- ${oldFilenames.map(quoteFilename).join(' ')}
+\`\`\`sh
+git checkout origin/main -- ${oldFilenames.join(' ')}
 \`\`\`
 `
 
