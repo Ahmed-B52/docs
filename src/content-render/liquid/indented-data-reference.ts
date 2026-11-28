@@ -1,18 +1,11 @@
 import assert from 'assert'
 
-import { type TagToken, type Liquid } from 'liquidjs'
+import { type TagToken, type Liquid, type Context } from 'liquidjs'
 import { THROW_ON_EMPTY, IndentedDataReferenceError } from './error-handling'
 import { getDataByLanguage } from '@/data-directory/lib/get-data'
 import { createLogger } from '@/observability/logger'
 
 const logger = createLogger(import.meta.url)
-
-interface LiquidScope {
-  environments: {
-    currentLanguage: string
-    [key: string]: unknown
-  }
-}
 
 // This class supports a tag that expects two parameters, a data reference and `spaces=NUMBER`:
 //
@@ -32,7 +25,9 @@ const IndentedDataReference = {
     this.markup = tagToken.args.trim()
   },
 
-  async render(scope: LiquidScope): Promise<string | undefined> {
+  async render(
+    scope: Context & { environments: { currentLanguage: string } },
+  ): Promise<string | undefined> {
     // obfuscate first legit space, remove all other spaces, then restore legit space
     // this way we can support spaces=NUMBER as well as spaces = NUMBER
     const input = this.markup
@@ -64,9 +59,11 @@ const IndentedDataReference = {
     }
 
     // add spaces to each line
-    const renderedReferenceWithIndent: string = text.replace(/^/gm, ' '.repeat(parseInt(numSpaces)))
+    const indent = parseInt(numSpaces)
+    scope.memoryLimit.use(indent * text.split(/[\r\n\u2028\u2029]/).length)
+    const renderedReferenceWithIndent = text.replace(/^/gm, ' '.repeat(indent))
 
-    return this.liquid.parseAndRender(renderedReferenceWithIndent, scope.environments)
+    return this.liquid.parseAndRender(renderedReferenceWithIndent, scope.spawn(scope.environments))
   },
 }
 

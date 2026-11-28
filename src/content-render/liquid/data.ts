@@ -1,5 +1,5 @@
 import { TokenizationError } from 'liquidjs'
-import type { TagToken, Liquid, Template } from 'liquidjs'
+import type { TagToken, Liquid, Context } from 'liquidjs'
 
 import { THROW_ON_EMPTY, DataReferenceError } from './error-handling'
 import { getDataByLanguage } from '@/data-directory/lib/get-data'
@@ -10,21 +10,14 @@ const logger = createLogger(import.meta.url)
 const Syntax = /([a-z0-9/\\_.\-[\]]+)/i
 const SyntaxHelp = "Syntax Error in 'data' - Valid syntax: data [path]"
 
-// Using unknown for scope because it has custom environments property not in Liquid's Scope type
-interface CustomScope {
-  environments: {
-    currentLanguage?: string
-    [key: string]: unknown
-  }
-  [key: string]: unknown
-}
-
 interface DataTag {
   path: string
   tagToken: TagToken
   liquid: Liquid
   parse(tagToken: TagToken): void
-  render(scope: CustomScope): Promise<Template | undefined>
+  render(
+    scope: Context & { environments: { currentLanguage?: string } },
+  ): Promise<string | undefined>
 }
 
 export default {
@@ -37,7 +30,7 @@ export default {
     this.tagToken = tagToken
   },
 
-  async render(scope: CustomScope) {
+  async render(scope: Context & { environments: { currentLanguage?: string } }) {
     let text = getDataByLanguage(this.path, scope.environments.currentLanguage || '')
     if (text === undefined) {
       if (scope.environments.currentLanguage === 'en') {
@@ -54,7 +47,8 @@ export default {
     text = handleIndent(this.tagToken, text)
     text = handleBlockquote(this.tagToken, text)
 
-    return this.liquid.parseAndRender(text, scope.environments)
+    // Keep data references isolated from local assignments while sharing the caller's limits.
+    return this.liquid.parseAndRender(text, scope.spawn(scope.environments))
   },
 } as DataTag
 
