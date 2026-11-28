@@ -1,4 +1,4 @@
-import { Liquid } from 'liquidjs'
+import { Liquid, type LiquidOptions } from 'liquidjs'
 import GithubSlugger from 'github-slugger'
 import Data from './data'
 import Octicon from './octicon'
@@ -20,51 +20,58 @@ const codeTabsTag = CodeTabs as unknown as LiquidTagDef
 const codeTabTag = CodeTab as unknown as LiquidTagDef
 const indentedDataReferenceTag = IndentedDataReference as unknown as LiquidTagDef
 
-export const engine = new Liquid({
-  extname: '.html',
-  dynamicPartials: false,
-})
+export function createLiquidEngine(options: LiquidOptions = {}): Liquid {
+  const engine = new Liquid({
+    extname: '.html',
+    dynamicPartials: false,
+    ...options,
+  })
 
-engine.registerTag('indented_data_reference', indentedDataReferenceTag)
-engine.registerTag('data', dataTag)
-engine.registerTag('octicon', Octicon)
-engine.registerTag('ifversion', ifversionTag)
+  engine.registerTag('indented_data_reference', indentedDataReferenceTag)
+  engine.registerTag('data', dataTag)
+  engine.registerTag('octicon', Octicon)
+  engine.registerTag('ifversion', ifversionTag)
 
-for (const tag of toolTags) {
-  engine.registerTag(tag, toolTag)
+  for (const tag of toolTags) {
+    engine.registerTag(tag, toolTag)
+  }
+
+  for (const tag in spotlightTags) {
+    engine.registerTag(tag, spotlightTag)
+  }
+
+  for (const tag of codeTabTags) {
+    engine.registerTag(tag, tag === 'codetabs' ? codeTabsTag : codeTabTag)
+  }
+
+  engine.registerTag('prompt', promptTag)
+
+  /**
+   * Like the `size` filter, but specifically for
+   * getting the number of keys in an object
+   */
+  engine.registerFilter('obj_size', (input: Record<string, unknown> | null | undefined): number => {
+    if (!input) return 0
+    return Object.keys(input).length
+  })
+
+  /**
+   * Returns the version number of a GHES version string
+   * ex: enterprise-server@2.22 => 2.22
+   */
+  engine.registerFilter('version_num', (input: string): string => {
+    return input.split('@')[1]
+  })
+
+  /**
+   * Convert the input to a slug
+   */
+  engine.registerFilter('slugify', (input: string): string => {
+    const slugger = new GithubSlugger()
+    return slugger.slug(input)
+  })
+
+  return engine
 }
 
-for (const tag in spotlightTags) {
-  engine.registerTag(tag, spotlightTag)
-}
-
-for (const tag of codeTabTags) {
-  engine.registerTag(tag, tag === 'codetabs' ? codeTabsTag : codeTabTag)
-}
-
-engine.registerTag('prompt', promptTag)
-
-/**
- * Like the `size` filter, but specifically for
- * getting the number of keys in an object
- */
-engine.registerFilter('obj_size', (input: Record<string, unknown> | null | undefined): number => {
-  if (!input) return 0
-  return Object.keys(input).length
-})
-
-/**
- * Returns the version number of a GHES version string
- * ex: enterprise-server@2.22 => 2.22
- */
-engine.registerFilter('version_num', (input: string): string => {
-  return input.split('@')[1]
-})
-
-/**
- * Convert the input to a slug
- */
-engine.registerFilter('slugify', (input: string): string => {
-  const slugger = new GithubSlugger()
-  return slugger.slug(input)
-})
+export const engine = createLiquidEngine()

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
+import { createLiquidEngine } from '@/content-render/liquid/engine'
 import Page from '@/frame/lib/page'
 import languages from '@/languages/lib/languages-server'
 import nonEnterpriseDefaultVersion from '@/versions/lib/non-enterprise-default-version'
@@ -15,6 +16,7 @@ describe('data tag', () => {
         variables: {
           stuff: {
             foo: 'Foo',
+            numbers: '{{ (1..3) | size }}',
           },
         },
         ui: {
@@ -47,6 +49,17 @@ describe('data tag', () => {
     // which we control the value of here in the test.
     expect(rendered.includes('Foo')).toBeTruthy()
   })
+  test('data references share the allocation budget of the caller', async () => {
+    const liquid = createLiquidEngine({ memoryLimit: 5 })
+    const context = { currentLanguage: 'en' }
+    const reference = '{% data variables.stuff.numbers %}'
+
+    await expect(liquid.parseAndRender(reference, context)).resolves.toBe('3')
+    await expect(liquid.parseAndRender(reference + reference, context)).rejects.toThrow(
+      'memory alloc limit exceeded',
+    )
+  })
+
   test('should throw if the data tag is used with something unrecognized', async () => {
     const page = await Page.init({
       relativePath: 'liquid-tags/bad-data-variable.md',

@@ -1,0 +1,28 @@
+diff --git a/node_modules/liquidjs/dist/liquid.node.js b/node_modules/liquidjs/dist/liquid.node.js
+index b33dcbf..a383597 100644
+--- a/node_modules/liquidjs/dist/liquid.node.js
++++ b/node_modules/liquidjs/dist/liquid.node.js
+@@ -1334,6 +1334,9 @@ function evalQuotedToken(token) {
+ function* evalRangeToken(token, ctx) {
+     const low = yield evalToken(token.lhs, ctx);
+     const high = yield evalToken(token.rhs, ctx);
++    // At unsafe magnitudes, adding one can leave the range iterator unchanged.
++    if (+low < +high + 1)
++        assert(Number.isSafeInteger(Math.trunc(+low)) && Number.isSafeInteger(Math.trunc(+high)), 'range bounds exceed safe integer precision');
+     ctx.memoryLimit.use(high - low + 1);
+     return range(+low, +high + 1);
+ }
+diff --git a/node_modules/liquidjs/dist/liquid.node.mjs b/node_modules/liquidjs/dist/liquid.node.mjs
+index 8a4337e..81d2085 100644
+--- a/node_modules/liquidjs/dist/liquid.node.mjs
++++ b/node_modules/liquidjs/dist/liquid.node.mjs
+@@ -1374,6 +1374,9 @@ function evalQuotedToken(token) {
+ function* evalRangeToken(token, ctx) {
+     const low = yield evalToken(token.lhs, ctx);
+     const high = yield evalToken(token.rhs, ctx);
++    // At unsafe magnitudes, adding one can leave the range iterator unchanged.
++    if (+low < +high + 1)
++        assert(Number.isSafeInteger(Math.trunc(+low)) && Number.isSafeInteger(Math.trunc(+high)), 'range bounds exceed safe integer precision');
+     ctx.memoryLimit.use(high - low + 1);
+     return range(+low, +high + 1);
+ }
