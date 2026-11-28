@@ -1,71 +1,70 @@
-import { addError, filterTokens } from 'markdownlint-rule-helpers'
-import { getRange, quotePrecedesLinkOpen } from '../helpers/utils'
-import { escapeRegExp } from 'lodash-es'
-import type { RuleParams, RuleErrorCallback, MarkdownToken, Rule } from '../../types'
+import { addError } from 'markdownlint-rule-helpers'
+import { parse, postprocess, preprocess } from 'micromark'
+import { gfmTable } from 'micromark-extension-gfm-table'
+import type { Rule } from '../../types'
 
 export const linkQuotation: Rule = {
   names: ['GHD043', 'link-quotation'],
   description: 'Internal link titles must not be surrounded by quotations',
   tags: ['links', 'url'],
-  parser: 'markdownit',
-  function: (params: RuleParams, onError: RuleErrorCallback) => {
-    filterTokens(params, 'inline', (token: MarkdownToken) => {
-      const { children } = token
-      if (!children) return
-      let previous_child: MarkdownToken = children[0]
-      let inLinkWithPrecedingQuotes = false
-      let linkUrl = ''
-      let content: string[] = []
-      for (let i = 1; i < children.length; i++) {
-        const child = children[i]
-        if (child.type === 'link_open' && quotePrecedesLinkOpen(previous_child.content || '')) {
-          if (!child.attrs) continue
-          inLinkWithPrecedingQuotes = true
-          linkUrl = escapeRegExp(child.attrs[0][1])
-        } else if (inLinkWithPrecedingQuotes && child.type === 'text') {
-          content.push(escapeRegExp((child.content || '').trim()))
-        } else if (inLinkWithPrecedingQuotes && child.type === 'code_inline') {
-          content.push(`\`${escapeRegExp((child.content || '').trim())}\``)
-        } else if (child.type === 'link_close') {
-          const title = content.join(' ')
-          const regex = new RegExp(`"\\[${title}\\]\\(${linkUrl}\\)({%.*%})?(!|\\.|\\?|,)?"`)
-          if (regex.test(child.line)) {
-            const matchResult = child.line.match(regex)
-            if (!matchResult) continue
-            const match = matchResult[0]
-            const range = getRange(child.line, match)
-            if (!range) continue
-            let newLine = match
-            if (newLine.startsWith('"')) {
-              newLine = newLine.slice(1)
-            }
-            if (newLine.endsWith('"')) {
-              newLine = newLine.slice(0, -1)
-            }
-            if (newLine.endsWith('".')) {
-              newLine = `${newLine.slice(0, -2)}.`
-            }
-            const lineNumber = child.lineNumber
-            addError(
-              onError,
-              lineNumber,
-              'Remove quotes surrounding the link title.',
-              match,
-              range,
-              {
-                lineNumber,
-                editColumn: range[0],
-                deleteCount: range[1],
-                insertText: newLine,
-              },
-            )
-          }
-          inLinkWithPrecedingQuotes = false
-          content = []
-          linkUrl = ''
-        }
-        previous_child = child
+  parser: 'none',
+  function: ({ lines }, onError) => {
+    if (!lines.some((line) => line.includes('"['))) return
+
+    // Markdownlint 0.34 does not expose its position-aware parser to custom rules.
+    const events = postprocess(
+      parse({ extensions: [gfmTable()] })
+        .document()
+        .write(preprocess()(lines.join('\n'), undefined, true)),
+    )
+    const liquidDelimiter = /\{%|%\}/g
+    let imageDepth = 0
+    let lastFixLine = 0
+    let lastFixEnd = 0
+
+    for (const [kind, { type, start, end }] of events) {
+      if (type === 'image') imageDepth += kind === 'enter' ? 1 : -1
+      if (kind !== 'exit' || type !== 'link' || imageDepth || start.line !== end.line) continue
+
+      const lineNumber = start.line
+      const line = lines[lineNumber - 1]
+      const openQuote = start.column - 2
+      let closeQuote = end.column - 1
+      if (line[openQuote] !== '"' || line[closeQuote - 1] !== ')') continue
+      if (lastFixLine === lineNumber && openQuote < lastFixEnd) continue
+
+      let beforeQuote = openQuote
+      while (line[beforeQuote - 1] === '\\') beforeQuote--
+      if ((openQuote - beforeQuote) % 2 !== 0) continue
+
+      // Consume only adjacent tags. Stop at the next delimiter so malformed tags
+      // cannot scan across later tag openers or absorb unrelated quoted links.
+      while (line.startsWith('{%', closeQuote)) {
+        liquidDelimiter.lastIndex = closeQuote + 2
+        const delimiter = liquidDelimiter.exec(line)
+        if (delimiter?.[0] !== '%}') break
+        closeQuote = liquidDelimiter.lastIndex
       }
-    })
+
+      if (/[!.?,]/.test(line.charAt(closeQuote))) closeQuote++
+      if (line[closeQuote] !== '"') continue
+
+      const range: [number, number] = [openQuote + 1, closeQuote - openQuote + 1]
+      addError(
+        onError,
+        lineNumber,
+        'Remove quotes surrounding the link title.',
+        line.slice(openQuote, closeQuote + 1),
+        range,
+        {
+          lineNumber,
+          editColumn: range[0],
+          deleteCount: range[1],
+          insertText: line.slice(openQuote + 1, closeQuote),
+        },
+      )
+      lastFixLine = lineNumber
+      lastFixEnd = closeQuote + 1
+    }
   },
 }
