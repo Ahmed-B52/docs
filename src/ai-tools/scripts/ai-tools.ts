@@ -2,8 +2,8 @@ import { Command } from 'commander'
 import fs from 'fs'
 import path from 'path'
 import ora from 'ora'
-import { execFileSync } from 'child_process'
 import dotenv from 'dotenv'
+import { expandLiquidForEditing } from '@/content-render/scripts/liquid-tags'
 import readFrontmatter from '@/frame/lib/read-frontmatter'
 import { findMarkdownFiles, mergeFrontmatterProperties } from '@/ai-tools/lib/file-utils'
 import {
@@ -198,9 +198,9 @@ program
               spinner.text = `Processing: ${relativePath}`
               try {
                 // Expand Liquid references before processing
+                const originalContent = fs.readFileSync(fileToProcess, 'utf8')
                 let originalIntro = ''
                 if (editorType === 'intro') {
-                  const originalContent = fs.readFileSync(fileToProcess, 'utf8')
                   const { data: originalData } = readFrontmatter(originalContent)
                   originalIntro = originalData?.intro || ''
                 }
@@ -208,9 +208,11 @@ program
                 if (options.verbose) {
                   console.log(`Expanding Liquid references in: ${relativePath}`)
                 }
-                runLiquidTagsScript('expand', [fileToProcess], options.verbose || false)
-
-                let content = fs.readFileSync(fileToProcess, 'utf8')
+                const { expanded, restore } = await expandLiquidForEditing(
+                  originalContent,
+                  options.verbose,
+                )
+                let content = expanded
 
                 // For intro prompt, add original intro and enrich context
                 if (editorType === 'intro') {
@@ -224,7 +226,6 @@ program
                 if (editorType === 'content-type' && content.includes('contentType:')) {
                   spinner.stop()
                   console.log(`⏭️  Skipping ${relativePath} (already has contentType)`)
-                  runLiquidTagsScript('restore', [fileToProcess], false)
                   continue
                 }
 
@@ -239,14 +240,15 @@ program
                 spinner.stop()
 
                 if (options.write) {
+                  const restoredAnswer = restore(answer)
                   if (editorType === 'intro' || editorType === 'content-type') {
                     // For frontmatter addition/modification, merge properties instead of overwriting entire file
-                    const updatedContent = mergeFrontmatterProperties(fileToProcess, answer)
+                    const updatedContent = mergeFrontmatterProperties(fileToProcess, restoredAnswer)
                     fs.writeFileSync(fileToProcess, updatedContent, 'utf8')
                     console.log(`✅ Added frontmatter properties to: ${relativePath}`)
                   } else {
                     // For other editor types, write the full result back to the original file
-                    fs.writeFileSync(fileToProcess, answer, 'utf8')
+                    fs.writeFileSync(fileToProcess, restoredAnswer, 'utf8')
                     console.log(`✅ Updated: ${relativePath}`)
                   }
                 } else {
@@ -256,26 +258,10 @@ program
                   }
                   console.log(answer)
                 }
-
-                // Always restore Liquid references after processing (even in non-write mode)
-                if (options.verbose) {
-                  console.log(`Restoring Liquid references in: ${relativePath}`)
-                }
-                runLiquidTagsScript('restore', [fileToProcess], options.verbose || false)
               } catch (err) {
                 const error = err as Error
                 spinner.fail(`Error processing ${relativePath}: ${error.message}`)
                 process.exitCode = 1
-
-                // Still try to restore Liquid references on error
-                try {
-                  runLiquidTagsScript('restore', [fileToProcess], false)
-                } catch (restoreError) {
-                  // Log restore failures in verbose mode for debugging
-                  if (options.verbose) {
-                    console.error(`Warning: Failed to restore Liquid references: ${restoreError}`)
-                  }
-                }
               } finally {
                 spinner.stop()
               }
@@ -299,36 +285,6 @@ program
   })
 
 program.parse(process.argv)
-
-/**
- * Run liquid-tags command on specified file paths
- */
-function runLiquidTagsScript(
-  command: 'expand' | 'restore',
-  filePaths: string[],
-  verbose: boolean = false,
-): void {
-  const args = [command, '--paths', ...filePaths]
-  if (verbose) {
-    args.push('--verbose')
-  }
-
-  try {
-    // Run liquid-tags script via tsx
-    const liquidTagsScriptPath = path.join(
-      process.cwd(),
-      'src/content-render/scripts/liquid-tags.ts',
-    )
-    execFileSync('npx', ['tsx', liquidTagsScriptPath, ...args], {
-      stdio: verbose ? 'inherit' : 'pipe',
-    })
-  } catch (error) {
-    if (verbose) {
-      console.error(`Error running liquid-tags ${command}:`, error)
-    }
-    // Don't fail the entire process if liquid-tags fails
-  }
-}
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
