@@ -152,6 +152,61 @@ describe('get-data', () => {
     }
   })
 
+  test('allows reusable symlinks that stay inside translated data', () => {
+    const reusables = path.join(languages.ja.dir, 'data', 'reusables')
+    fs.symlinkSync('coolness.md', path.join(reusables, 'alias.md'), 'file')
+
+    expect(getDataByLanguage('reusables.alias', 'ja')).toBe('これがマークダウンです')
+  })
+
+  test('rejects file and directory symlinks that leave translated data', () => {
+    const reusables = path.join(languages.ja.dir, 'data', 'reusables')
+    const sibling = path.join(languages.ja.dir, 'data-sibling')
+    fs.mkdirSync(sibling)
+    const outsideFile = path.join(sibling, 'fixture.md')
+    fs.writeFileSync(outsideFile, 'Outside the approved directory')
+    fs.symlinkSync(outsideFile, path.join(reusables, 'outside.md'), 'file')
+    fs.symlinkSync(sibling, path.join(reusables, 'outside-dir'), 'junction')
+
+    expect(() => getDataByLanguage('reusables.outside', 'ja')).toThrow(
+      'Data path resolves outside the approved data directory',
+    )
+    expect(() => getDataByLanguage('reusables.outside-dir.fixture', 'ja')).toThrow(
+      'Data path resolves outside the approved data directory',
+    )
+    expect(() => getDeepDataByLanguage('reusables.outside-dir', 'ja')).toThrow(
+      'Data path resolves outside the approved data directory',
+    )
+  })
+
+  test('rejects a symlink in place of the translated data root', () => {
+    const jaDir = languages.ja.dir
+    const linkedRoot = fs.mkdtempSync(path.join(dd.root, 'linked-translation-'))
+    const otherData = path.join(linkedRoot, 'other-data')
+    const reusables = path.join(otherData, 'reusables')
+    fs.mkdirSync(reusables, { recursive: true })
+    fs.writeFileSync(path.join(reusables, 'linked-root.md'), 'Outside the approved directory')
+    fs.symlinkSync(otherData, path.join(linkedRoot, 'data'), 'junction')
+    languages.ja.dir = linkedRoot
+    try {
+      expect(() => getDataByLanguage('reusables.linked-root', 'ja')).toThrow(
+        'Data path resolves outside the approved data directory',
+      )
+    } finally {
+      languages.ja.dir = jaDir
+    }
+  })
+
+  test('allows the documented local English early access directory symlink', () => {
+    const earlyAccess = path.join(dd.root, 'local-early-access')
+    const reusables = path.join(earlyAccess, 'reusables')
+    fs.mkdirSync(reusables, { recursive: true })
+    fs.writeFileSync(path.join(reusables, 'local.md'), 'Early access content')
+    fs.symlinkSync(earlyAccess, path.join(dd.root, 'data', 'early-access'), 'junction')
+
+    expect(getDataByLanguage('early-access.reusables.local', 'en')).toBe('Early access content')
+  })
+
   test('getDataByLanguage failures', () => {
     // The most basic test
     {
