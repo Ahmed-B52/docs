@@ -234,6 +234,8 @@ describe('get-data on corrupt translations', () => {
         },
         reusables: {
           cool: VALID_ENGLISH_MARKDOWN,
+          unsupported: '\uFEFF--- Js \r\n---\r\nEnglish body',
+          body: '---json\n{"title":"Example"}\n---\n---\n\nReusable body\n',
         },
       },
     })
@@ -252,6 +254,7 @@ describe('get-data on corrupt translations', () => {
           },
           reusables: {
             cool: VALID_JAPANESE_MARKDOWN,
+            body: '---javascript\n---\nTranslated body',
           },
         },
       },
@@ -294,6 +297,20 @@ describe('get-data on corrupt translations', () => {
       const result = getDataByLanguage('reusables.cool', 'ja')
       expect(result).toBe('*English* /Markdown/')
     }
+  })
+
+  test('rejects an unsupported reusable frontmatter language after a BOM', () => {
+    expect(() => getDataByLanguage('reusables.unsupported', 'en')).toThrow(
+      'Unsupported Markdown frontmatter language "Js"',
+    )
+  })
+
+  test('preserves a Markdown rule at the start of the body after frontmatter', () => {
+    expect(getDataByLanguage('reusables.body', 'en')).toBe('---\n\nReusable body')
+  })
+
+  test('falls back to English when a reusable translation selects an unsupported language', () => {
+    expect(getDataByLanguage('reusables.body', 'ja')).toBe('---\n\nReusable body')
   })
 })
 

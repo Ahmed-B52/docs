@@ -15,6 +15,8 @@ interface YAMLException extends Error {
   mark?: any
 }
 
+class UnsupportedMarkdownFrontmatterError extends Error {}
+
 interface FileSystemError extends Error {
   code?: string
 }
@@ -124,20 +126,20 @@ export const getDataByLanguage = memoize((dottedPath: string, langCode: string):
     }
     return value
   } catch (error) {
-    if (error instanceof Error && (error as YAMLException).mark && error.message) {
-      // It's a yaml.load() generated error!
-      // Remember, the file that we read might have been a .yml or a .md
-      // file. If it was a .md file, with corrupt front-matter that too
-      // would have caused a YAMLException
+    if (
+      error instanceof UnsupportedMarkdownFrontmatterError ||
+      (error instanceof Error && (error as YAMLException).mark && error.message)
+    ) {
+      // Both YAML files and Markdown frontmatter can contain invalid YAML.
+      // An unsupported frontmatter language makes a translation invalid too.
       if (langCode !== 'en') {
         if (DEBUG_JIT_DATA_READS) {
-          logger.warn('Unable to parse Yaml in translation', { langCode, dottedPath, error })
+          logger.warn('Unable to parse data in translation', { langCode, dottedPath, error })
         }
         // Give it one more chance, but use English this time
         return getDataByDir(dottedPath, languages.en.dir)
       }
-      // Always throw English Yaml reading errors. Staff writers
-      // need to know early and explicitly that they are corrupt.
+      // Surface invalid English data so writers can fix it.
       throw error
     }
 
@@ -220,8 +222,7 @@ function getDataByDir(
     const nakedname = split.pop()!
     fullPath.push(...split)
     fullPath.push(`${nakedname}.md`)
-    const markdown = getMarkdownContent(dir, fullPath.join(path.sep), englishRoot)
-    let { content } = matter(markdown)
+    let content = getMarkdownContent(dir, fullPath.join(path.sep), englishRoot)
     if (dir !== englishRoot) {
       // If we're reading a translation, we need to replace the possible
       // corruptions. For example `[AUTOTITLE"을](/foo/bar)`.
@@ -340,7 +341,18 @@ const getMarkdownContent = memoize(
     }
 
     const fileContent = getFileContent(root, relPath, englishRoot)
-    return matter(fileContent).content.trimEnd()
+    // Match gray-matter's BOM and delimiter handling before it can select an engine.
+    // The language option alone does not prevent the file from overriding it.
+    const markdown = fileContent.replace(/^\uFEFF/, '')
+    if (markdown.startsWith('---') && !markdown.startsWith('----')) {
+      const { name } = matter.language(markdown)
+      if (name && name !== 'json' && !/^ya?ml$/i.test(name)) {
+        throw new UnsupportedMarkdownFrontmatterError(
+          `Unsupported Markdown frontmatter language "${name}" in ${relPath}`,
+        )
+      }
+    }
+    return matter(fileContent, { language: 'yaml' }).content.trimEnd()
   },
 )
 

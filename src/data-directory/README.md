@@ -54,7 +54,7 @@ Purpose-built utilities, schemas, and workflows that power our Liquid `{% data %
 
 ## Data conventions and consumers
 - File locations: Everything under `data/` (English and localized mirrors). Reusables/variables/ui are read via dotted paths (`reusables.foo.bar`, `variables.product.prodname_ghe_server`, `ui.pages.home`).
-- Markdown in data: Frontmatter is stripped by `gray-matter`; content is trimmed.
+- Markdown in `get-data.ts`: Frontmatter is parsed once by `gray-matter` and accepts only YAML or JSON. Trailing whitespace is removed from the body.
 - Downstream consumers:
   - Liquid tags: `content-render/liquid/data.ts`, `indented-data-reference.ts`
   - Content linter: `content-linter/lib/linting-rules/liquid-data-tags.ts`, `frontmatter-intro-links.ts`
