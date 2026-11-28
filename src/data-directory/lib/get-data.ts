@@ -77,8 +77,7 @@ function getDeepDataByDir(dottedPath: string, dir: string): any {
 }
 
 function getDirents(root: string, relPath: string): fs.Dirent[] {
-  const filePath = root ? path.join(root, relPath) : relPath
-  return fs.readdirSync(filePath, { withFileTypes: true })
+  return fs.readdirSync(resolveDataPath(root, relPath), { withFileTypes: true })
 }
 
 export const getUIDataMerged = memoize((langCode: string): any => {
@@ -344,6 +343,31 @@ const getMarkdownContent = memoize(
   },
 )
 
+function resolveDataPath(root: string | undefined, relPath: string): string {
+  const checkoutRoot = fs.realpathSync(root || '.')
+  const dataRoot = path.join(checkoutRoot, 'data')
+  const filePath = path.join(checkoutRoot, relPath)
+  const earlyAccessRoot = path.join(dataRoot, 'early-access')
+
+  // Local development can link English early access data to a separate checkout.
+  // Translation checkouts cannot choose where an approved data root points.
+  const allowedRoot =
+    (root ?? '.') === languages.en.dir && isWithin(earlyAccessRoot, filePath)
+      ? fs.realpathSync(earlyAccessRoot)
+      : dataRoot
+
+  const resolvedPath = fs.realpathSync(filePath)
+  if (!isWithin(allowedRoot, resolvedPath)) {
+    throw new Error(`Data path resolves outside the approved data directory: ${relPath}`)
+  }
+  return resolvedPath
+}
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
 const getFileContent = (
   root: string | undefined,
   relPath: string,
@@ -352,7 +376,7 @@ const getFileContent = (
   const filePath = root ? path.join(root, relPath) : relPath
   if (DEBUG_JIT_DATA_READS) logger.info('READ', { filePath })
   try {
-    return fs.readFileSync(filePath, 'utf-8')
+    return fs.readFileSync(resolveDataPath(root, relPath), 'utf-8')
   } catch (err) {
     // It might fail because that particular data entry doesn't yet
     // exist in a translation
