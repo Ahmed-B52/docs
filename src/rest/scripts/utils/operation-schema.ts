@@ -1,5 +1,6 @@
-// This schema is used to validate each generated operation object at build time
+export const REST_PAGE_SLUG_PATTERN = '^[a-z0-9]+(?:-[a-z0-9]+)*$'
 
+// This schema is used to validate each generated operation object at build time
 export default {
   type: 'object',
   required: [
@@ -34,10 +35,12 @@ export default {
     category: {
       description: 'the `issues` in `/v3/issues/events/`; supports legacy developer site URLs',
       type: 'string',
+      pattern: REST_PAGE_SLUG_PATTERN,
     },
     subcategory: {
       description: 'the `events` in `/v3/issues/events/`; supports legacy developer site URLs',
       type: 'string',
+      pattern: REST_PAGE_SLUG_PATTERN,
     },
     parameters: {
       description: 'Parameters to the operation that can be present in the URL path or query',

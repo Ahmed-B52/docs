@@ -1,4 +1,5 @@
 import path from 'path'
+import { REST_PAGE_SLUG_PATTERN } from './operation-schema'
 import walk from 'walk-sync'
 import { readFile } from 'fs/promises'
 
@@ -99,13 +100,20 @@ async function getDataFrontmatter(dataDirectory: string): Promise<RestVersions> 
     })
 
   const restVersions: RestVersions = {}
+  const pageSlug = new RegExp(REST_PAGE_SLUG_PATTERN)
 
   for (const file of fileList) {
     const data = JSON.parse(await readFile(file, 'utf-8')) // data is RestOperationCategory
     const docsVersionName = getDocsVersion(path.basename(path.dirname(file)))
     const category = path.basename(file, '.json') // filename IS the category
     const subcategories = Object.keys(data) // data keys are subcategories directly
+    if (!pageSlug.test(category)) {
+      throw new Error(`Invalid REST category in ${file}: ${category}`)
+    }
     for (const subcategory of subcategories) {
+      if (!pageSlug.test(subcategory)) {
+        throw new Error(`Invalid REST subcategory in ${file}: ${subcategory}`)
+      }
       if (!restVersions[category]) restVersions[category] = {}
       if (!restVersions[category][subcategory]) {
         restVersions[category][subcategory] = { versions: [docsVersionName] }
@@ -144,7 +152,7 @@ async function getMarkdownContent(versions: RestVersions): Promise<MarkdownUpdat
     const subcategories = Object.keys(subcategoryObject)
     // The file path will be content/rest/<category>/<subcategory>.md
     for (const subcategory of subcategories) {
-      const filepath = path.join('content/rest', category, `${subcategory}.md`)
+      const filepath = path.join(targetDirectory, category, `${subcategory}.md`)
       // If the file already exists on disk, only the `versions` frontmatter
       // property is updated. So the TODOCS placeholder values are only used
       // when the file is newly created, which is the intention. When the TODOCS
