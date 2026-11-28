@@ -1,8 +1,8 @@
+import fs from 'fs/promises'
 import path from 'path'
 
 import { createLogger } from '@/observability/logger'
-import languages from '@/languages/lib/languages-server'
-import type { Language } from '@/languages/lib/languages'
+import languages, { type Language } from '@/languages/lib/languages-server'
 import type { UnversionedTree, UnversionLanguageTree, SiteTree, Tree } from '@/types'
 
 import { allVersions } from '@/versions/lib/all-versions'
@@ -159,7 +159,21 @@ async function translateTree(
       throw new FrontmatterParsingError('Skipping known-broken translation file')
     }
 
-    const read = await readFileContents(fullPath)
+    // Anchor to the checkout so a symlink replacing the content directory
+    // cannot redefine the boundary. Read the same resolved path we checked.
+    const contentRoot = path.join(await fs.realpath(langObj.dir), 'content')
+    const resolvedPath = await fs.realpath(fullPath)
+    const relativeToContent = path.relative(contentRoot, resolvedPath)
+    if (
+      !relativeToContent ||
+      relativeToContent === '..' ||
+      relativeToContent.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativeToContent)
+    ) {
+      throw new FrontmatterParsingError('Translation file resolves outside its content directory')
+    }
+
+    const read = await readFileContents(resolvedPath)
     // If it worked, great!
     content = read.content
     data = read.data as Record<string, unknown>
