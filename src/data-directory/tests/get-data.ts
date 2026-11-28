@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
+import { YAMLException } from 'js-yaml'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 import languages from '@/languages/lib/languages-server'
@@ -236,6 +237,8 @@ describe('get-data on corrupt translations', () => {
           cool: VALID_ENGLISH_MARKDOWN,
           unsupported: '\uFEFF--- Js \r\n---\r\nEnglish body',
           body: '---json\n{"title":"Example"}\n---\n---\n\nReusable body\n',
+          labeledYaml: '---YML\r\ntitle: Example\r\n---\r\nReusable body\r\n',
+          invalidJson: '---json\ntitle: Example\n---\nReusable body\n',
         },
       },
     })
@@ -307,6 +310,14 @@ describe('get-data on corrupt translations', () => {
 
   test('preserves a Markdown rule at the start of the body after frontmatter', () => {
     expect(getDataByLanguage('reusables.body', 'en')).toBe('---\n\nReusable body')
+  })
+
+  test('accepts a YAML alias on reusable frontmatter', () => {
+    expect(getDataByLanguage('reusables.labeledYaml', 'en')).toBe('Reusable body')
+  })
+
+  test('requires valid JSON when reusable frontmatter is labeled json', () => {
+    expect(() => getDataByLanguage('reusables.invalidJson', 'en')).toThrow(YAMLException)
   })
 
   test('falls back to English when a reusable translation selects an unsupported language', () => {

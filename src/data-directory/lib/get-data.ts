@@ -2,20 +2,14 @@ import fs from 'fs'
 import path from 'path'
 
 import yaml from 'js-yaml'
-import matter from '@gr2m/gray-matter'
 import { merge, get } from 'lodash-es'
 
+import { parseYamlFrontmatter } from '@/frame/lib/parse-yaml-frontmatter'
 import languages from '@/languages/lib/languages-server'
 import { correctTranslatedContentStrings } from '@/languages/lib/correct-translation-content'
 import { createLogger } from '@/observability/logger'
 
 const logger = createLogger(import.meta.url)
-
-interface YAMLException extends Error {
-  mark?: any
-}
-
-class UnsupportedMarkdownFrontmatterError extends Error {}
 
 interface FileSystemError extends Error {
   code?: string
@@ -126,12 +120,8 @@ export const getDataByLanguage = memoize((dottedPath: string, langCode: string):
     }
     return value
   } catch (error) {
-    if (
-      error instanceof UnsupportedMarkdownFrontmatterError ||
-      (error instanceof Error && (error as YAMLException).mark && error.message)
-    ) {
-      // Both YAML files and Markdown frontmatter can contain invalid YAML.
-      // An unsupported frontmatter language makes a translation invalid too.
+    if (error instanceof yaml.YAMLException) {
+      // Fall back when YAML data or Markdown frontmatter in a translation is invalid.
       if (langCode !== 'en') {
         if (DEBUG_JIT_DATA_READS) {
           logger.warn('Unable to parse data in translation', { langCode, dottedPath, error })
@@ -192,13 +182,13 @@ function getDataByDir(
     if (allData && key) {
       const value = allData[key]
       if (value) {
-        let content = matter(value).content
+        let content = parseYamlFrontmatter(value).content
         if (dir !== englishRoot) {
           let englishContent = content
           try {
             const englishData = getYamlContent(englishRoot, fullPath.join(path.sep), englishRoot)
             if (englishData?.[key]) {
-              englishContent = matter(englishData[key]).content
+              englishContent = parseYamlFrontmatter(englishData[key]).content
             }
           } catch (error) {
             if ((error as FileSystemError).code !== 'ENOENT') {
@@ -341,18 +331,10 @@ const getMarkdownContent = memoize(
     }
 
     const fileContent = getFileContent(root, relPath, englishRoot)
-    // Match gray-matter's BOM and delimiter handling before it can select an engine.
-    // The language option alone does not prevent the file from overriding it.
-    const markdown = fileContent.replace(/^\uFEFF/, '')
-    if (markdown.startsWith('---') && !markdown.startsWith('----')) {
-      const { name } = matter.language(markdown)
-      if (name && name !== 'json' && !/^ya?ml$/i.test(name)) {
-        throw new UnsupportedMarkdownFrontmatterError(
-          `Unsupported Markdown frontmatter language "${name}" in ${relPath}`,
-        )
-      }
-    }
-    return matter(fileContent, { language: 'yaml' }).content.trimEnd()
+    return parseYamlFrontmatter(fileContent, {
+      allowFormatLabels: true,
+      filename: relPath,
+    }).content.trimEnd()
   },
 )
 
