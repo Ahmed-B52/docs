@@ -1,6 +1,6 @@
-import { writeFileSync } from 'fs'
 import type { Rule, Config } from '../types'
 import { allRules, allConfig } from '../lib/helpers/get-rules'
+import { writeRegularFile } from '../lib/helpers/regular-file'
 
 main()
 
@@ -63,7 +63,9 @@ function main() {
   }
   markdown.push(...searchReplaceRows)
 
-  writeFileSync('data/reusables/contributing/content-linter-rules.md', markdown.join('\n'))
+  writeRegularFile('data/reusables/contributing/content-linter-rules.md', markdown.join('\n'), {
+    create: true,
+  })
 }
 
 // The search-replace rule configures multiple psuedo-rules

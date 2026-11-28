@@ -17,6 +17,7 @@ import { customConfig, githubDocsFrontmatterConfig } from '../style/github-docs'
 import { defaultConfig } from '../lib/default-markdownlint-options'
 import { prettyPrintResults } from './pretty-print-results'
 import { getLintableYml } from '@/content-linter/lib/helpers/get-lintable-yml'
+import { readRegularFile, statWithoutSymlinks, writeRegularFile } from '../lib/helpers/regular-file'
 import { printAnnotationResults } from '../lib/helpers/print-annotations'
 import languages from '@/languages/lib/languages-server'
 import type { Rule as MarkdownlintRule } from 'markdownlint'
@@ -168,15 +169,38 @@ async function main() {
   // Initializes the config to pass to markdownlint based on the input options
   const { config, configuredRules } = getMarkdownLintConfig(errorsOnly, rules)
 
+  // Keep report keys relative while opening the selected file under the
+  // same root used for discovery. Markdownlint accepts a custom reader.
+  const lintFs = {
+    readFile(
+      file: string,
+      _encoding: string,
+      callback: (error: Error | null, text?: string) => void,
+    ) {
+      queueMicrotask(() => {
+        let text: string
+        try {
+          text = readRegularFile(path.resolve(languages.en.dir, file))
+        } catch (error) {
+          callback(error as Error)
+          return
+        }
+        callback(null, text)
+      })
+    },
+  }
+
   // Run Markdownlint for content directory
   const resultContent = (await markdownlint.promises.markdownlint({
     files: files.content,
+    fs: lintFs,
     config: config.content,
     customRules: configuredRules.content,
   })) as LintResults
   // Run Markdownlint for data directory
   const resultData = (await markdownlint.promises.markdownlint({
     files: files.data,
+    fs: lintFs,
     config: config.data,
     customRules: configuredRules.data,
   })) as LintResults
@@ -185,6 +209,7 @@ async function main() {
   const resultFrontmatter = await markdownlint.promises.markdownlint({
     frontMatter: null,
     files: files.content,
+    fs: lintFs,
     config: config.frontMatter,
     customRules: configuredRules.frontMatter,
   })
@@ -192,7 +217,7 @@ async function main() {
   // Run Markdownlint on "lintable" Markdown strings in a YML file
   const resultYml: LintResults = {}
   for (const ymlFile of files.yml) {
-    const lintableYml = await getLintableYml(ymlFile)
+    const lintableYml = await getLintableYml(ymlFile, path.resolve(languages.en.dir, ymlFile))
     if (!lintableYml) continue
 
     const resultYmlFile = (await markdownlint.promises.markdownlint({
@@ -235,11 +260,12 @@ async function main() {
       if (!results[file] || !results[file].some((flaw) => flaw.fixInfo)) {
         continue
       }
-      const content = fs.readFileSync(file, 'utf8')
+      const absolute = path.resolve(languages.en.dir, file)
+      const content = readRegularFile(absolute)
       const applied = applyFixes(content, results[file] as any)
       if (content !== applied) {
         countFixedFiles++
-        fs.writeFileSync(file, applied, 'utf-8')
+        writeRegularFile(absolute, applied)
       }
     }
   }
@@ -391,16 +417,22 @@ function getFilesToLint(inputPaths: string[]): FileList {
   // The path passed to Markdownlint is what is displayed
   // in the error report, so we want to normalize it and
   // and make it relative if it's absolute.
+  const walkOptions = { followSymlinks: false }
   for (const rawPath of inputPaths) {
     const absPath = path.resolve(rawPath)
-    if (fs.statSync(rawPath).isDirectory()) {
+    const stats = statWithoutSymlinks(absPath)
+    if (!stats) {
+      console.warn(`warning: skipping missing or symbolic-link path '${rawPath}'.`)
+      continue
+    }
+    if (stats.isDirectory()) {
       if (isInDir(absPath, contentDir)) {
-        fileList.content.push(...walkFiles(absPath, ['.md']))
+        fileList.content.push(...walkFiles(absPath, ['.md'], walkOptions))
       } else if (isInDir(absPath, dataDir)) {
-        fileList.data.push(...walkFiles(absPath, ['.md']))
-        fileList.yml.push(...walkFiles(absPath, ['.yml']))
+        fileList.data.push(...walkFiles(absPath, ['.md'], walkOptions))
+        fileList.yml.push(...walkFiles(absPath, ['.yml'], walkOptions))
       }
-    } else {
+    } else if (stats.isFile()) {
       if (isInDir(absPath, contentDir) || isAFixtureMdFile(absPath)) {
         fileList.content.push(absPath)
       } else if (isInDir(absPath, dataDir)) {
@@ -434,7 +466,7 @@ function getFilesToLint(inputPaths: string[]): FileList {
         continue
       }
 
-      if (seen.has(relPath)) continue
+      if (seen.has(relPath) || !statWithoutSymlinks(filePath)?.isFile()) continue
       seen.add(relPath)
       clean.push(relPath)
     }
@@ -813,7 +845,7 @@ function isOptionsValid() {
 
   for (const filePath of optionPaths) {
     try {
-      fs.statSync(filePath)
+      fs.lstatSync(filePath)
       validPaths.push(filePath) // Keep track of valid paths
     } catch {
       if ('paths'.includes(filePath)) {

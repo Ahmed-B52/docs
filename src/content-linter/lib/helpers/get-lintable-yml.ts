@@ -1,5 +1,5 @@
 import yaml from 'js-yaml'
-import fs from 'fs/promises'
+import { readRegularFile } from './regular-file'
 
 import dataSchemas from '@/data-directory/lib/data-schemas/index'
 import ajv from '@/tests/lib/validate-json-schema'
@@ -60,7 +60,10 @@ ajv.addKeyword({
 // back to the location in the original schema file,
 // so we also need the parent path of the `lintable`
 // property in the schema.
-export async function getLintableYml(dataFilePath: string): Promise<Record<string, string> | null> {
+export async function getLintableYml(
+  dataFilePath: string,
+  absolutePath: string,
+): Promise<Record<string, string> | null> {
   const matchingDataPath = lintableData.find(
     (ref) => dataFilePath === ref || dataFilePath.startsWith(ref),
   )
@@ -71,7 +74,7 @@ export async function getLintableYml(dataFilePath: string): Promise<Record<strin
   const schema = (await import(schemaFilePath)).default
   if (!schema) return null
 
-  const data = yaml.load(await fs.readFile(dataFilePath, 'utf8'))
+  const data = yaml.load(readRegularFile(absolutePath))
 
   mdDict.clear()
   // This validate function will call all keyword validator functions and populate mdDict

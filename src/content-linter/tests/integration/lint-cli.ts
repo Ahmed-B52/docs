@@ -61,6 +61,33 @@ describe('Content Linter CLI Integration Tests', { timeout: 30000 }, () => {
     return { output, exitCode }
   }
 
+  test.skipIf(process.platform === 'win32')(
+    'applies fixes only to regular files reached without symbolic links',
+    async () => {
+      const selected = path.join(testContentDir, 'selected')
+      const other = path.join(testContentDir, 'other')
+      await fs.mkdir(selected)
+      await fs.mkdir(other)
+      const regular = path.join(selected, 'regular.md')
+      const untouched = path.join(other, 'untouched.md')
+      const link = path.join(selected, 'linked.md')
+      const linkedDirectory = path.join(selected, 'linked-directory')
+      await fs.writeFile(regular, '##Heading\n')
+      await fs.writeFile(untouched, '##Heading\n')
+      await fs.symlink(untouched, link)
+      await fs.symlink(other, linkedDirectory, 'dir')
+
+      const { output, exitCode } = await runLinter(
+        `--fix --rules MD018 --paths "${selected}" "${link}" "${path.join(linkedDirectory, 'untouched.md')}" "${linkedDirectory}"`,
+      )
+
+      expect(exitCode).toBe(0)
+      expect(output).toContain('selected/regular.md')
+      expect(await fs.readFile(regular, 'utf8')).toBe('## Heading\n')
+      expect(await fs.readFile(untouched, 'utf8')).toBe('##Heading\n')
+    },
+  )
+
   describe('Linter functionality verification', () => {
     test('should detect errors when explicitly running search-replace rule', async () => {
       // Baseline test - ensures the linter can detect errors

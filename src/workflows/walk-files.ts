@@ -13,7 +13,11 @@ export default function walkFiles(
   opts: Record<string, unknown> = {},
 ) {
   const extensions = Array.isArray(ext) ? ext : [ext]
-  const walkSyncOpts = { includeBasePath: true, directories: false }
+  const walkSyncOpts = {
+    includeBasePath: true,
+    directories: false,
+    ...(opts.followSymlinks === false && { fs: { ...fs, statSync: fs.lstatSync } }),
+  }
 
   return walk(dir, walkSyncOpts)
     .filter(
