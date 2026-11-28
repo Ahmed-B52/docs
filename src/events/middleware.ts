@@ -2,7 +2,7 @@ import { createLogger } from '@/observability/logger'
 import express from 'express'
 import { omit, without, mapValues } from 'lodash-es'
 import QuickLRU from 'quick-lru'
-import { ErrorObject } from 'ajv'
+import { createHash } from 'crypto'
 
 import type { ExtendedRequest } from '@/types'
 import type { Response } from 'express'
@@ -12,7 +12,11 @@ import type { EventT } from './lib/hydro'
 import catchMiddlewareError from '@/observability/middleware/catch-middleware-error'
 import { noCacheControl } from '@/frame/middleware/cache-control'
 import { getJsonValidator } from '@/tests/lib/validate-json-schema'
-import { formatErrors } from './lib/middleware-errors'
+import {
+  formatError,
+  formatErrorDetails,
+  MAX_VALIDATION_DIAGNOSTICS,
+} from './lib/middleware-errors'
 import { publish as _publish } from './lib/hydro'
 import { DOTCOM_USER_COOKIE_NAME, STAFFONLY_COOKIE_NAME } from '@/frame/lib/constants'
 import { analyzeComment, getGuessedLanguage } from './lib/analyze-comment'
@@ -42,16 +46,6 @@ const sentValidationErrors = new QuickLRU({
   maxSize: 10_000,
   maxAge: 1000 * 60,
 })
-
-// We use a LRU cache & a hash of the error message
-// to prevent sending multiple validation errors that can spam requests to Hydro
-const getValidationErrorHash = (validateErrors: ErrorObject[]) => {
-  // limit to 10 second windows
-  const window: number = Math.floor(new Date().getTime() / 10000)
-  return `${window}:${(validateErrors || [])
-    .map((error: ErrorObject) => error.message + error.instancePath + JSON.stringify(error.params))
-    .join(':')}`
-}
 
 router.post(
   '/',
@@ -92,12 +86,23 @@ router.post(
         }
         const validate = validators[type]
         if (!validate(body)) {
-          const hash = getValidationErrorHash(validate.errors || [])
-          if (!sentValidationErrors.has(hash)) {
-            sentValidationErrors.set(hash, true)
-            formatErrors(validate.errors || [], body).map((error) => {
-              validationErrors.push({ schema: hydroNames.validation, value: error })
-            })
+          // Sample one AJV error per rejected event, and stop allocating diagnostics
+          // once this request has used its budget.
+          if (validationErrors.length < MAX_VALIDATION_DIAGNOSTICS) {
+            const error = validate.errors?.[0]
+            if (error) {
+              const details = formatErrorDetails(error)
+              const window = Math.floor(Date.now() / 10_000)
+              const hash = createHash('sha256').update(JSON.stringify(details)).digest('hex')
+              const key = `${window}:${hash}`
+              if (!sentValidationErrors.has(key)) {
+                validationErrors.push({
+                  schema: hydroNames.validation,
+                  value: formatError(details, body),
+                })
+                sentValidationErrors.set(key, true)
+              }
+            }
           }
           continue
         }
