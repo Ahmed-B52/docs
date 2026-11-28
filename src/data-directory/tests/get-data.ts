@@ -31,11 +31,14 @@ describe('get-data', () => {
           stuff: {
             foo: 'Foo',
             bar: 'Bar',
+            withFrontmatter: 'English body',
+            unsupportedLanguage: 'English fallback',
           },
         },
         reusables: {
           coolness: 'This is *Markdown*',
           otherness: '**Also** Markdown',
+          unsupportedLanguage: 'English Markdown',
         },
       },
     })
@@ -56,10 +59,13 @@ describe('get-data', () => {
           variables: {
             stuff: {
               foo: 'フー',
+              withFrontmatter: '---\nlabel: example\n---\nJapanese body',
+              unsupportedLanguage: '\uFEFF--- JS\r\n{}\r\n---\r\nJapanese body',
             },
           },
           reusables: {
             coolness: 'これがマークダウンです',
+            unsupportedLanguage: '---javascript\n{}\n---\nJapanese Markdown',
           },
         },
       },
@@ -126,6 +132,14 @@ describe('get-data', () => {
     }
   })
 
+  test('strips YAML frontmatter from a translated variable', () => {
+    expect(getDataByLanguage('variables.stuff.withFrontmatter', 'ja')).toBe('Japanese body')
+  })
+
+  test('falls back to English for a translated variable with executable frontmatter', () => {
+    expect(getDataByLanguage('variables.stuff.unsupportedLanguage', 'ja')).toBe('English fallback')
+  })
+
   test('getDataByLanguage reusables English', () => {
     // The most basic test
     {
@@ -150,6 +164,10 @@ describe('get-data', () => {
       const result = getDataByLanguage('reusables.otherness', 'ja')
       expect(result).toBe('**Also** Markdown')
     }
+  })
+
+  test('falls back to English for a translated reusable with executable frontmatter', () => {
+    expect(getDataByLanguage('reusables.unsupportedLanguage', 'ja')).toBe('English Markdown')
   })
 
   test('getDataByLanguage failures', () => {

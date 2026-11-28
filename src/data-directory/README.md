@@ -21,6 +21,7 @@ Purpose-built utilities, schemas, and workflows that power our Liquid `{% data %
   - `getDataByLanguage(dottedPath, langCode)`: Returns a single value (YAML/MD/variables/reusables/ui/glossaries/release-notes).
   - `getDeepDataByLanguage(dottedPath, langCode)`: Returns nested objects for an entire subtree (e.g., `tables`, `features`).
   - Translation fallbacks: If a localized file is missing or unparsable, falls back to English. Certain files are forced-English (`ALWAYS_ENGLISH_YAML_FILES`, `ALWAYS_ENGLISH_MD_FILES`).
+  - JavaScript frontmatter parsing is disabled for variables and reusables. Translations that require it fall back to English.
   - Memoization: Caches reads except in `NODE_ENV=development` to simplify local debugging.
 - `lib/data-directory.ts`
   - Recursively walks a directory, filters by extensions (`.json`, `.md/.markdown`, `.yml`) and ignore patterns, and emits a dotted-key object using `filename-to-key`.
