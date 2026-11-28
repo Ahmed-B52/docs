@@ -8,13 +8,28 @@ const logger = createLogger(import.meta.url)
 
 const isProduction = process.env.NODE_ENV === 'production'
 
+// Leave room for the documentation to grow while bounding repeated inclusions
+// and keeping the resulting tree shallow enough for recursive consumers.
+const MAX_TREE_NODES = 25_000
+const MAX_TREE_DEPTH = 128
+
 export default async function createTree(
   originalPath: string,
   rootPath?: string,
   previousTree?: UnversionedTree,
 ): Promise<UnversionedTree | undefined> {
-  const basePath = rootPath || originalPath
+  return expandTree(originalPath, rootPath || originalPath, previousTree, [], {
+    remaining: MAX_TREE_NODES - 1,
+  })
+}
 
+async function expandTree(
+  originalPath: string,
+  basePath: string,
+  previousTree: UnversionedTree | undefined,
+  ancestors: readonly string[],
+  budget: { remaining: number },
+): Promise<UnversionedTree | undefined> {
   // On recursive runs, this is processing page.children items in `/<link>` format.
   // If the path exists as is, assume this is a directory with a child index.md.
   // Otherwise, assume it's a child .md file and add `.md` to the path.
@@ -57,6 +72,15 @@ export default async function createTree(
       }
       throw new Error(msg)
     }
+  }
+
+  // Use the selected file's real path so that directory, explicit index,
+  // and symlink references to the same page cannot bypass the check.
+  const pagePath = await fs.realpath(filepath)
+  if (ancestors.includes(pagePath)) {
+    throw new Error(
+      `Cycle in 'children' frontmatter: "${ancestors.at(-1)}" links to "${filepath}", which is already on this branch.`,
+    )
   }
 
   const relativePath = filepath.replace(`${basePath}/`, '')
@@ -104,7 +128,17 @@ export default async function createTree(
   }
 
   // Process frontmatter children recursively.
-  if (page.children) {
+  if (page.children?.length) {
+    const childAncestors = [...ancestors, pagePath]
+    if (childAncestors.length >= MAX_TREE_DEPTH) {
+      throw new Error(`Content tree exceeds ${MAX_TREE_DEPTH} levels at "${filepath}".`)
+    }
+    // Reserve work before creating child promises. Count every inclusion,
+    // even if the same page appears in multiple branches or is missing.
+    if (page.children.length > budget.remaining) {
+      throw new Error(`Content tree exceeds ${MAX_TREE_NODES} nodes while expanding "${filepath}".`)
+    }
+    budget.remaining -= page.children.length
     assertUniqueChildren(page)
     item.childPages = (
       await Promise.all(
@@ -146,7 +180,13 @@ export default async function createTree(
             childPath = path.posix.join(originalPath, child)
           }
 
-          const subTree = await createTree(childPath, basePath, childPreviousTree)
+          const subTree = await expandTree(
+            childPath,
+            basePath,
+            childPreviousTree,
+            childAncestors,
+            budget,
+          )
           if (subTree && child.startsWith('/content/')) {
             // Mark this subtree as a cross-product child so it can be excluded from the sidebar
             subTree.crossProductChild = true
