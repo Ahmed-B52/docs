@@ -3,7 +3,7 @@ import type { PageTransformer } from './types'
 import type { CategorizedEvents } from '@/audit-logs/types'
 import { renderContent } from '@/content-render/index'
 import { loadTemplate } from '@/article-api/lib/load-template'
-import matter from '@gr2m/gray-matter'
+import parseFrontmatter from '@/frame/lib/parse-frontmatter'
 
 /**
  * Transformer for Audit Logs pages
@@ -46,7 +46,7 @@ export class AuditLogsTransformer implements PageTransformer {
         '<!-- Content after this section is automatically generated -->',
       )
       if (markerIndex > 0) {
-        const { content } = matter(page.markdown)
+        const { content } = parseFrontmatter(page.markdown)
         const manualContentMarkerIndex = content.indexOf(
           '<!-- Content after this section is automatically generated -->',
         )

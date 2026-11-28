@@ -28,9 +28,44 @@ describe('frontmatter', () => {
     expect(errors.length).toBe(0)
   })
 
+  test.each(['---js', '\uFEFF--- JavaScript \r'])(
+    'rejects executable frontmatter declarations (%j)',
+    (opening) => {
+      const { data, errors } = parse(`${opening}\n{}\n---\nBody`, { filepath })
+
+      expect(data).toBeUndefined()
+      expect(errors).toEqual([
+        {
+          filepath,
+          message: 'YML parsing error!',
+          reason: 'unsupported frontmatter language; use YAML or JSON',
+        },
+      ])
+    },
+  )
+
+  test('preserves data-only frontmatter with an explicit language', () => {
+    const { data, content, errors } = parse('\uFEFF---yaml\r\ntitle: Example\r\n---\r\nBody')
+
+    expect(data).toEqual({ title: 'Example' })
+    expect(content).toBe('Body')
+    expect(errors).toEqual([])
+  })
+
   describe('frontmatter.stringify', () => {
-    test('is exported', () => {
-      expect(typeof parse.stringify).toBe('function')
+    test('round trips a Markdown body and data', () => {
+      const output = parse.stringify('Body', { title: 'Example' })
+      expect(parse(output)).toEqual({
+        data: { title: 'Example' },
+        content: 'Body\n',
+        errors: [],
+      })
+    })
+
+    test('rejects executable declarations when given a Markdown string', () => {
+      expect(() => parse.stringify('---js\n{}\n---\nBody', {})).toThrow(
+        'unsupported frontmatter language',
+      )
     })
   })
 

@@ -234,6 +234,8 @@ describe('get-data on corrupt translations', () => {
         },
         reusables: {
           cool: VALID_ENGLISH_MARKDOWN,
+          localized: VALID_ENGLISH_MARKDOWN,
+          nested: '---\ntitle: Example\n---\n---js\n{}\n---\nBody',
         },
       },
     })
@@ -252,6 +254,7 @@ describe('get-data on corrupt translations', () => {
           },
           reusables: {
             cool: VALID_JAPANESE_MARKDOWN,
+            localized: '---js\n{}\n---\nTranslated body',
           },
         },
       },
@@ -281,6 +284,16 @@ describe('get-data on corrupt translations', () => {
       const result = getDataByLanguage('variables.everything.is', 'ja')
       expect(result).toBe('Awesome')
     }
+  })
+
+  test('falls back to English when translated reusable frontmatter declares JavaScript', () => {
+    expect(getDataByLanguage('reusables.localized', 'ja')).toBe('*English* /Markdown/')
+  })
+
+  test('rejects executable frontmatter when a reusable body is parsed again', () => {
+    expect(() => getDataByLanguage('reusables.nested', 'en')).toThrow(
+      'unsupported frontmatter language',
+    )
   })
 
   test('getDataByLanguage on a corrupt .md file', () => {
