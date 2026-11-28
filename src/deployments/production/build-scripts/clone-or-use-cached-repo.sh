@@ -1,5 +1,13 @@
 set -e
 
+authenticated_git() {
+  # Supply the token only to Git and use a helper that never stores credentials.
+  DOCS_CLONE_TOKEN="$GITHUB_TOKEN" GIT_TERMINAL_PROMPT=0 git \
+    -c credential.helper= \
+    -c 'credential.https://github.com.helper=!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$DOCS_CLONE_TOKEN"; fi; }; f' \
+    "$@"
+}
+
 # We use this function to use the cached version of the repo if it exists from 
 # a previous Dockerfile build. Otherwise, we clone the repo and check out the
 # specified branch/SHA.
@@ -11,15 +19,17 @@ clone_or_use_cached_repo() {
   repo_name="$1"
   repo_url="$2"
   branch="$3"
+  origin_url="https://github.com/github/$repo_url.git"
 
   echo "Processing repository '$repo_name'..."
 
   if [ -d "$repo_name/.git" ]; then
     echo "Repository '$repo_name' already exists. Fetching updates..."
-    cd "$repo_name"
+    cd "$repo_name" || return 1
     
     # Fetch latest changes
-    if ! git fetch origin "$branch"; then
+    if ! git config --replace-all remote.origin.url "$origin_url" ||
+      ! authenticated_git fetch origin "$branch"; then
       echo "❌ Failed to fetch repository '$repo_name'"
       cd ..
       return 1
@@ -29,7 +39,7 @@ clone_or_use_cached_repo() {
       cd ..
       return 1
     fi
-    if ! git pull origin "$branch"; then
+    if ! authenticated_git pull origin "$branch"; then
       echo "❌ Failed to pull repository '$repo_name'"
       cd ..
       return 1
@@ -42,11 +52,14 @@ clone_or_use_cached_repo() {
     echo "Cloning repository '$repo_name' from branch '$branch'..."
 
     # We only need the most recent change for production deploys, so we use --depth 1
-    if ! git clone --depth 1 --branch "$branch" "https://${GITHUB_TOKEN}@github.com/github/$repo_url.git" "$repo_name"; then
+    if ! authenticated_git clone --depth 1 --branch "$branch" "$origin_url" "$repo_name"; then
       echo "❌ Failed to clone repository '$repo_name'"
       return 1
     fi
   fi
+
+  # Later Docker stages copy the working trees, so discard Git metadata here.
+  rm -rf -- "$repo_name/.git" || return 1
 
   echo "Repository '$repo_name' is up to date."
 }
