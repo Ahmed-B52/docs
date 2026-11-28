@@ -1,0 +1,32 @@
+diff --git a/node_modules/@gr2m/gray-matter/lib/engines.js b/node_modules/@gr2m/gray-matter/lib/engines.js
+index 1dfec8d952..9fecd96551 100644
+--- a/node_modules/@gr2m/gray-matter/lib/engines.js
++++ b/node_modules/@gr2m/gray-matter/lib/engines.js
+@@ -28,27 +28,3 @@ engines.json = {
+     return JSON.stringify(obj, opts.replacer, opts.space);
+   }
+ };
+-
+-/**
+- * JavaScript
+- */
+-
+-engines.javascript = {
+-  parse: function parse(str, options, wrap) {
+-    /* eslint no-eval: 0 */
+-    try {
+-      if (wrap !== false) {
+-        str = '(function() {\nreturn ' + str.trim() + ';\n}());';
+-      }
+-      return eval(str) || {};
+-    } catch (err) {
+-      if (wrap !== false && /(unexpected|identifier)/i.test(err.message)) {
+-        return parse(str, options, false);
+-      }
+-      throw new SyntaxError(err);
+-    }
+-  },
+-  stringify: function() {
+-    throw new Error('stringifying JavaScript is not supported');
+-  }
+-};

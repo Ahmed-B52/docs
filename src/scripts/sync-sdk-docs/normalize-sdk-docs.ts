@@ -122,8 +122,16 @@ function filePathToUrlPath(absPath: string): string {
 function addFrontmatter(filePath: string): void {
   const raw = fs.readFileSync(filePath, 'utf8')
 
-  // Skip files that already have frontmatter
-  if (raw.startsWith('---')) {
+  // Match gray-matter's BOM handling before checking existing frontmatter.
+  const markdown = raw.replace(/^\uFEFF/, '')
+  if (markdown.startsWith('---')) {
+    // Keep existing data frontmatter, but stop the sync on other engines.
+    const { name } = matter.language(markdown)
+    if (!markdown.startsWith('----') && name && !/^ya?ml$/i.test(name) && name !== 'json') {
+      throw new Error(
+        `Unsupported frontmatter language in ${path.relative(SDK_DOCS_DIR, filePath)}`,
+      )
+    }
     console.log(`  SKIP (has frontmatter): ${path.relative(SDK_DOCS_DIR, filePath)}`)
     return
   }
@@ -193,7 +201,8 @@ function addFrontmatter(filePath: string): void {
   // For index.md files, strip all body content (docs-internal convention:
   // index pages are frontmatter-only, navigation is generated from children)
   const body = isIndex ? '' : bodyLines.join('\n')
-  const output = matter.stringify(body, frontmatterData)
+  // A string argument would be parsed again as a frontmatter document.
+  const output = matter.stringify({ content: body }, frontmatterData)
 
   fs.writeFileSync(filePath, output, 'utf8')
   console.log(`  OK: ${path.relative(SDK_DOCS_DIR, filePath)}`)
@@ -354,7 +363,7 @@ function createMissingIndexFiles(): string[] {
         children,
       }
 
-      const content = matter.stringify('', frontmatterData)
+      const content = matter.stringify({ content: '' }, frontmatterData)
       fs.writeFileSync(indexPath, content, 'utf8')
       created.push(indexPath)
       console.log(`  CREATED: ${path.relative(SDK_DOCS_DIR, indexPath)}`)
