@@ -7,7 +7,7 @@ import fs from 'fs'
 import path from 'path'
 import { program } from 'commander'
 import frontmatter from '@/frame/lib/read-frontmatter'
-import walkFiles from '@/workflows/walk-files'
+import { walkRegularFiles } from '@/workflows/walk-files'
 import { contentTypesEnum } from '@/frame/lib/frontmatter'
 import type { MarkdownFrontmatter } from '@/types'
 
@@ -49,28 +49,27 @@ const options: ScriptOptions = program.opts()
 const contentDir = path.join(process.cwd(), 'content')
 
 async function main() {
-  const filesToProcess: string[] = walkFiles(contentDir, ['.md']).filter((file: string) => {
-    if (file.endsWith('README.md')) return false
-    if (file.includes('early-access')) return false
-    if (!options.paths) return true
-    return options.paths.some((p: string) => {
-      // Allow either a full content path like "content/foo/bar.md"
-      // or a top-level directory name like "copilot"
-      if (!p.startsWith('content')) {
-        p = path.join('content', p)
-      }
-      if (!fs.existsSync(p)) {
-        console.error(`${p} not found`)
-        process.exit(1)
-      }
-      if (path.relative(process.cwd(), file).startsWith(p)) return true
-    })
+  const selectedPaths = options.paths?.map((p) => {
+    // Allow either a full content path like "content/foo/bar.md"
+    // or a top-level directory name like "copilot"
+    const selectedPath = p.startsWith('content') ? p : path.join('content', p)
+    if (!fs.existsSync(selectedPath)) {
+      console.error(`${selectedPath} not found`)
+      process.exit(1)
+    }
+    return selectedPath
   })
 
   let processedCount = 0
   let updatedCount = 0
 
-  for (const filePath of filesToProcess) {
+  for (const filePath of walkRegularFiles(contentDir)) {
+    if (!filePath.endsWith('.md') || filePath.endsWith('README.md')) continue
+    if (filePath.includes('early-access')) continue
+    if (selectedPaths) {
+      const relativePath = path.relative(process.cwd(), filePath)
+      if (!selectedPaths.some((p) => relativePath.startsWith(p))) continue
+    }
     try {
       const result = processFile(filePath, options)
       if (result.processed) processedCount++
