@@ -27,11 +27,17 @@ import { execFileSync } from 'child_process'
 
 import { program } from 'commander'
 import chalk from 'chalk'
-import walk from 'walk-sync'
 import escapeStringRegexp from 'escape-string-regexp'
 
 import fm from '@/frame/lib/frontmatter'
 import readFrontmatter from '@/frame/lib/read-frontmatter'
+import {
+  assertContentFile,
+  assertContentPath,
+  readContentFile,
+  walkContentFiles,
+  writeContentFile,
+} from './content-paths'
 
 // Type definitions
 interface MoveOptions {
@@ -82,28 +88,15 @@ async function main(opts: MoveOptions, nameTuple: string[]) {
     throw new Error('old == new')
   }
 
-  const uppercases = new_.match(/[A-Z]+/g) || []
+  const uppercases = path.relative(CONTENT_ROOT, new_).match(/[A-Z]+/g) || []
   if (uppercases.length > 0) {
     throw new Error(`Uppercase in file name not allowed ('${uppercases}')`)
   }
 
-  let oldPath = old
-  let newPath = new_
-  if (undo) {
-    oldPath = new_
-    newPath = old
-  } else {
-    oldPath = old
-    newPath = new_
-  }
-
-  // The file you're about to move needs to exist
-  if (!fs.existsSync(oldPath)) {
-    console.error(chalk.red(`${oldPath} does not exist.`))
-    process.exit(1)
-  }
-
-  let isFolder = fs.lstatSync(oldPath).isDirectory()
+  let [oldPath, newPath] = (undo ? [new_, old] : [old, new_]).map((name) => path.resolve(name))
+  const source = assertContentPath(CONTENT_ROOT, oldPath)
+  const destination = assertContentPath(CONTENT_ROOT, newPath, true)
+  let isFolder = source?.isDirectory() ?? false
 
   // Before validating, see if we need to fake that the newPath should be.
   // This is to mimic how bash `mv` works where you can do:
@@ -119,14 +112,14 @@ async function main(opts: MoveOptions, nameTuple: string[]) {
       const wouldBe = path.join(oldPath, path.basename(newPath))
       // We can't know if the `newPath` is a directory or file because
       // whichever it is, it doesn't exist.
-      if (fs.existsSync(wouldBe) && !fs.lstatSync(wouldBe).isDirectory()) {
+      if (assertContentPath(CONTENT_ROOT, wouldBe, true)?.isFile()) {
         isFolder = false
         oldPath = wouldBe
       }
     }
   } else {
     if (!isFolder) {
-      if (fs.existsSync(newPath) && fs.lstatSync(newPath).isDirectory()) {
+      if (destination?.isDirectory()) {
         newPath = path.join(newPath, path.basename(oldPath))
       }
     }
@@ -141,19 +134,24 @@ async function main(opts: MoveOptions, nameTuple: string[]) {
   }
 
   // This will exit non-zero if anything is wrong with these inputs
-  validateFileInputs(oldPath, newPath, isFolder)
+  validateFileInputs(oldPath, newPath)
+
+  // Validate all required indexes before renaming anything.
+  for (const index of [
+    path.join(CONTENT_ROOT, 'index.md'),
+    parentIndex(oldPath),
+    parentIndex(newPath),
+  ]) {
+    assertContentFile(CONTENT_ROOT, index)
+  }
 
   const oldHref = makeHref(CONTENT_ROOT, undo ? newPath : oldPath)
   const newHref = makeHref(CONTENT_ROOT, undo ? oldPath : newPath)
 
   if (isFolder) {
     // The folder must have an index.md file
-    const indexFilePath = path.join(oldPath, 'index.md')
-    if (!fs.existsSync(indexFilePath)) {
-      throw new Error(`${oldPath} does not have an index.md file`)
-    }
-    // Gather individual files by walking `oldPath` recursively
-    // The second argument is
+    assertContentFile(CONTENT_ROOT, path.join(oldPath, 'index.md'))
+    // Gather and validate the entire subtree before moving it.
     const files = findFilesInFolder(oldPath, newPath, opts)
 
     // First take care of the `git mv` (or regular rename) part.
@@ -202,33 +200,8 @@ async function main(opts: MoveOptions, nameTuple: string[]) {
   }
 }
 
-function validateFileInputs(oldPath: string, newPath: string, isFolder: boolean) {
-  if (isFolder) {
-    // Make sure that only the last portion of the path is different
-    // and that all preceding are equal.
-    const [oldBase, oldName] = splitDirectory(oldPath)
-    const [newBase] = splitDirectory(newPath)
-    if (oldBase !== newBase && !existsAndIsDirectory(newBase)) {
-      console.error(
-        chalk.red(
-          `When moving a directory, both bases need to be the same. '${oldBase}' != '${newBase}'`,
-        ),
-      )
-      console.warn(chalk.yellow(`Only the name (e.g. '${oldName}') can be different.`))
-      process.exit(1)
-    }
-  }
-
-  if (!path.resolve(newPath).startsWith(CONTENT_ROOT)) {
-    const relativeRoot = path.relative('.', CONTENT_ROOT)
-    console.error(chalk.red(`New path does not start with '${relativeRoot}'`))
-    process.exit(1)
-  }
-
-  if (!fs.existsSync(oldPath)) {
-    console.error(chalk.red(`${oldPath} does not resolve to an existing file or a folder`))
-    process.exit(1)
-  }
+function validateFileInputs(oldPath: string, newPath: string) {
+  assertMoveSource(oldPath)
   if (path.basename(oldPath) === 'index.md') {
     console.error(
       chalk.red(`File path can't be 'index.md'. Refer to it by its foldername instead.`),
@@ -242,30 +215,43 @@ function validateFileInputs(oldPath: string, newPath: string, isFolder: boolean)
     process.exit(1)
   }
 
-  if (fs.existsSync(newPath)) {
-    console.error(chalk.red(`Can't move to a ${isFolder ? 'folder' : 'file'} that already exists.`))
+  if (assertMoveDestination(newPath)) {
+    console.error(chalk.red(`Destination already exists: ${newPath}`))
     process.exit(1)
   }
 
-  if (/\s/.test(newPath)) {
+  if (/\s/.test(path.relative(CONTENT_ROOT, newPath))) {
     throw new Error(`New path (${newPath}) can't contain whitespace`)
   }
 }
 
-function existsAndIsDirectory(directory: string) {
-  return fs.existsSync(directory) && fs.lstatSync(directory).isDirectory()
+function assertMoveSource(filePath: string) {
+  if (filePath === CONTENT_ROOT) throw new Error('Cannot move the content root')
+  const stat = assertContentPath(CONTENT_ROOT, filePath)
+  if (!stat) throw new Error(`Source does not exist: ${filePath}`)
+  return stat
 }
 
-function splitDirectory(directory: string) {
-  return [path.dirname(directory), path.basename(directory)]
+function assertMoveDestination(filePath: string) {
+  if (filePath === CONTENT_ROOT) throw new Error('Cannot replace the content root')
+  return assertContentPath(CONTENT_ROOT, filePath, true)
+}
+
+function assertRenamePaths(oldPath: string, newPath: string) {
+  assertMoveSource(oldPath)
+  if (assertMoveDestination(newPath)) throw new Error(`Destination already exists: ${newPath}`)
+}
+
+function parentIndex(filePath: string) {
+  return path.join(path.dirname(filePath), 'index.md')
 }
 
 function findFilesInFolder(oldPath: string, newPath: string, opts: MoveOptions): FileTuple[] {
   const { undo, verbose } = opts
   const files: FileTuple[] = []
-  const allFiles = walk(oldPath, { includeBasePath: true, directories: false })
+  const allFiles = walkContentFiles(CONTENT_ROOT, oldPath, true)
   for (const filePath of allFiles) {
-    const newFilePath = filePath.replace(oldPath, newPath)
+    const newFilePath = path.join(newPath, path.relative(oldPath, filePath))
     const oldHref = makeHref(CONTENT_ROOT, undo ? newFilePath : filePath)
     const newHref = makeHref(CONTENT_ROOT, undo ? filePath : newFilePath)
     files.push([filePath, newFilePath, oldHref, newHref])
@@ -288,8 +274,9 @@ function makeHref(root: string, filePath: string) {
 
 function moveFolder(oldPath: string, newPath: string, files: FileTuple[], opts: MoveOptions) {
   const { verbose, git: useGit } = opts
+  assertRenamePaths(oldPath, newPath)
   if (useGit) {
-    let cmd = ['mv', oldPath, newPath]
+    let cmd = ['mv', '--', oldPath, newPath]
     if (verbose) {
       console.log(`git mv command: ${chalk.grey(cmd.join(' '))}`)
     }
@@ -311,8 +298,9 @@ function moveFolder(oldPath: string, newPath: string, files: FileTuple[], opts: 
 function undoFolder(oldPath: string, newPath: string, files: FileTuple[], opts: MoveOptions) {
   const { verbose, git: useGit } = opts
 
+  assertRenamePaths(oldPath, newPath)
   if (useGit) {
-    let cmd = ['mv', oldPath, newPath]
+    let cmd = ['mv', '--', oldPath, newPath]
     execFileSync('git', cmd)
     if (verbose) {
       console.log(`git mv command: ${chalk.grey(cmd.join(' '))}`)
@@ -347,8 +335,8 @@ function getBasename(fileOrDirectory: string) {
 function removeFromChildren(oldPath: string, opts: MoveOptions): PositionInfo {
   const { verbose } = opts
 
-  const parentFilePath = path.join(path.dirname(oldPath), 'index.md')
-  const fileContent = fs.readFileSync(parentFilePath, 'utf-8')
+  const parentFilePath = parentIndex(oldPath)
+  const fileContent = readContentFile(CONTENT_ROOT, parentFilePath)
   const { content, data } = readFrontmatter(fileContent)
   const oldName = getBasename(oldPath)
 
@@ -383,10 +371,10 @@ function removeFromChildren(oldPath: string, opts: MoveOptions): PositionInfo {
   }
 
   if (data) {
-    fs.writeFileSync(
+    writeContentFile(
+      CONTENT_ROOT,
       parentFilePath,
       readFrontmatter.stringify(content, data, { lineWidth: 10000 } as any),
-      'utf-8',
     )
   }
   if (verbose) {
@@ -398,8 +386,8 @@ function removeFromChildren(oldPath: string, opts: MoveOptions): PositionInfo {
 
 function addToChildren(newPath: string, positions: PositionInfo, opts: MoveOptions) {
   const { verbose } = opts
-  const parentFilePath = path.join(path.dirname(newPath), 'index.md')
-  const fileContent = fs.readFileSync(parentFilePath, 'utf-8')
+  const parentFilePath = parentIndex(newPath)
+  const fileContent = readContentFile(CONTENT_ROOT, parentFilePath)
   const { content, data } = readFrontmatter(fileContent)
   const newName = getBasename(newPath)
 
@@ -432,10 +420,10 @@ function addToChildren(newPath: string, positions: PositionInfo, opts: MoveOptio
   }
 
   if (data) {
-    fs.writeFileSync(
+    writeContentFile(
+      CONTENT_ROOT,
       parentFilePath,
       readFrontmatter.stringify(content, data, { lineWidth: 10000 } as any),
-      'utf-8',
     )
   }
   if (verbose) {
@@ -447,7 +435,7 @@ function moveFiles(files: FileTuple[], opts: MoveOptions) {
   const { verbose, git: useGit } = opts
   // Before we do anything, assert that the files are valid
   for (const [oldPath] of files) {
-    const fileContent = fs.readFileSync(oldPath, 'utf-8')
+    const fileContent = readContentFile(CONTENT_ROOT, oldPath)
     const { errors } = fm(fileContent, { filepath: oldPath })
     for (let i = 0; i < errors.length; i++) {
       const error = errors[i]
@@ -469,8 +457,9 @@ function moveFiles(files: FileTuple[], opts: MoveOptions) {
       console.log(`Moving ${chalk.bold(oldPath)} to ${chalk.bold(newPath)}`)
     }
 
+    assertRenamePaths(oldPath, newPath)
     if (useGit) {
-      const cmd = ['mv', oldPath, newPath]
+      const cmd = ['mv', '--', oldPath, newPath]
       execFileSync('git', cmd)
       if (verbose) {
         console.log(`git mv command: ${chalk.grey(cmd.join(' '))}`)
@@ -500,17 +489,17 @@ function editFiles(files: FileTuple[], updateParent: boolean, opts: MoveOptions)
   // See comment in the first loop above for why we're looping over the files
   // two times.
   for (const [oldPath, newPath, oldHref] of files) {
-    const fileContent = fs.readFileSync(newPath, 'utf-8')
+    const fileContent = readContentFile(CONTENT_ROOT, newPath)
     const { content, data } = readFrontmatter(fileContent)
     if (!data) continue
     if (!(REDIRECT_FROM_KEY in data)) {
       data[REDIRECT_FROM_KEY] = []
     }
     data[REDIRECT_FROM_KEY].push(oldHref)
-    fs.writeFileSync(
+    writeContentFile(
+      CONTENT_ROOT,
       newPath,
       readFrontmatter.stringify(content, data, { lineWidth: 10000 } as any),
-      'utf-8',
     )
     if (verbose) {
       console.log(`Added ${oldHref} to 'redirects_from' in ${newPath}`)
@@ -554,7 +543,7 @@ function undoFiles(files: FileTuple[], updateParent: boolean, opts: MoveOptions)
 
   // First undo any edits to the file
   for (const [oldPath, newPath, oldHref] of files) {
-    const fileContent = fs.readFileSync(newPath, 'utf-8')
+    const fileContent = readContentFile(CONTENT_ROOT, newPath)
     const { content, data } = readFrontmatter(fileContent)
     if (!data) continue
 
@@ -565,10 +554,10 @@ function undoFiles(files: FileTuple[], updateParent: boolean, opts: MoveOptions)
       delete data[REDIRECT_FROM_KEY]
     }
 
-    fs.writeFileSync(
+    writeContentFile(
+      CONTENT_ROOT,
       newPath,
       readFrontmatter.stringify(content, data, { lineWidth: 10000 } as any),
-      'utf-8',
     )
     if (updateParent) {
       addToChildren(newPath, removeFromChildren(oldPath, opts), opts)
@@ -592,26 +581,24 @@ function changeHomepageLinks(oldHref: string, newHref: string, verbose: boolean)
   const escapedHomepageOldHref = escapeStringRegexp(homepageOldHref)
   const regex = new RegExp(`- ${escapedHomepageOldHref}$`, 'gm')
   const homepage = path.join(CONTENT_ROOT, 'index.md')
-  const oldContent = fs.readFileSync(homepage, 'utf-8')
+  const oldContent = readContentFile(CONTENT_ROOT, homepage)
   const newContent = oldContent.replace(regex, `- ${homepageNewHref}`)
   if (oldContent !== newContent) {
-    fs.writeFileSync(homepage, newContent, 'utf-8')
+    writeContentFile(CONTENT_ROOT, homepage, newContent)
     if (verbose) console.log(`Updated homepage links`)
   }
 }
 
 function changeFeaturedLinks(oldHref: string, newHref: string): void {
-  const allFiles = walk(CONTENT_ROOT, {
-    globs: ['**/*.md'],
-    includeBasePath: true,
-    directories: false,
-  }).filter((file) => !file.includes('README.md'))
+  const allFiles = walkContentFiles(CONTENT_ROOT).filter(
+    (file) => file.endsWith('.md') && !file.includes('README.md'),
+  )
 
   const regex = new RegExp(`(^|%} )${escapeStringRegexp(oldHref)}($| {%)`)
 
   for (const file of allFiles) {
     let changed = false
-    const fileContent = fs.readFileSync(file, 'utf-8')
+    const fileContent = readContentFile(CONTENT_ROOT, file)
     const { content, data } = readFrontmatter(fileContent)
     if (!data) continue
     const featuredLinks = data.featuredLinks || {}
@@ -629,10 +616,10 @@ function changeFeaturedLinks(oldHref: string, newHref: string): void {
     }
 
     if (changed) {
-      fs.writeFileSync(
+      writeContentFile(
+        CONTENT_ROOT,
         file,
         readFrontmatter.stringify(content, data, { lineWidth: 10000 } as any),
-        'utf-8',
       )
     }
   }
