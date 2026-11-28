@@ -31,8 +31,8 @@ interface LiquidReference {
 }
 
 // Constants
-const ROOT = process.env.ROOT || '.'
-const DATA_ROOT = path.resolve(path.join(ROOT, 'data'))
+const ROOT = path.resolve(process.env.ROOT || '.')
+const DATA_ROOT = path.join(ROOT, 'data')
 const REUSABLES_ROOT = path.join(DATA_ROOT, 'reusables')
 const VARIABLES_ROOT = path.join(DATA_ROOT, 'variables')
 
@@ -83,6 +83,45 @@ function getDataFilePath(type: 'reusable' | 'variable', dataPath: string): strin
 
     return candidatePath
   }
+}
+
+// Check all components below the configured checkout root. O_NOFOLLOW also
+// rejects a leaf symlink substituted between the check and open, where supported.
+function withDataFile<T>(filePath: string, writable: boolean, useFile: (fd: number) => T): T {
+  const expected = fs.lstatSync(filePath, { bigint: true })
+  if (!expected.isFile()) {
+    throw new Error(`Expected a regular data file (no symlinks): ${filePath}`)
+  }
+  for (let dir = path.dirname(filePath); dir !== ROOT; dir = path.dirname(dir)) {
+    if (!fs.lstatSync(dir).isDirectory()) {
+      throw new Error(`Expected a data directory (no symlinks): ${dir}`)
+    }
+  }
+
+  const { O_RDONLY, O_RDWR, O_NOFOLLOW, O_NONBLOCK } = fs.constants
+  const fd = fs.openSync(filePath, (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_NONBLOCK)
+  try {
+    const actual = fs.fstatSync(fd, { bigint: true })
+    if (!actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
+      throw new Error(`Data file changed before opening: ${filePath}`)
+    }
+    return useFile(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+function readDataFile(filePath: string): string {
+  return withDataFile(filePath, false, (fd) => fs.readFileSync(fd, 'utf8'))
+}
+
+function replaceDataFileContent(fd: number, content: string): void {
+  const buffer = Buffer.from(content, 'utf8')
+  // The descriptor has already been read; write at explicit offsets from the start.
+  for (let offset = 0; offset < buffer.length; ) {
+    offset += fs.writeSync(fd, buffer, offset, buffer.length - offset, offset)
+  }
+  fs.ftruncateSync(fd, buffer.length)
 }
 
 /**
@@ -323,15 +362,17 @@ async function restoreReferences(options: ExpandOptions): Promise<void> {
             console.log(chalk.blue('  Restoring updated data files back to liquid tags...'))
           for (const dataFile of updatedDataFiles) {
             try {
-              const dataContent = fs.readFileSync(dataFile, 'utf-8')
-              const restoredDataContent = restoreFileContent(dataContent, verbose, allowedTypes)
-              if (restoredDataContent !== dataContent) {
-                fs.writeFileSync(dataFile, restoredDataContent, 'utf-8')
-                if (verbose) {
-                  const dataPath = convertFilePathToDataPath(dataFile)
-                  console.log(chalk.green(`  Restored: ${dataPath}`))
+              withDataFile(dataFile, true, (fd) => {
+                const dataContent = fs.readFileSync(fd, 'utf8')
+                const restoredDataContent = restoreFileContent(dataContent, verbose, allowedTypes)
+                if (restoredDataContent !== dataContent) {
+                  replaceDataFileContent(fd, restoredDataContent)
+                  if (verbose) {
+                    const dataPath = convertFilePathToDataPath(dataFile)
+                    console.log(chalk.green(`  Restored: ${dataPath}`))
+                  }
                 }
-              }
+              })
             } catch (error) {
               if (verbose) {
                 const dataPath = convertFilePathToDataPath(dataFile)
@@ -479,18 +520,13 @@ function loadDataValue(type: 'reusable' | 'variable', dataPath: string): string 
   try {
     const targetPath = getDataFilePath(type, dataPath)
 
-    if (!fs.existsSync(targetPath)) {
-      return null
-    }
-
+    const content = readDataFile(targetPath)
     if (type === 'reusable') {
-      const content = fs.readFileSync(targetPath, 'utf8')
       // Remove any frontmatter if present (same as resolveReusable)
       const contentWithoutFrontmatter = content.replace(/^---[\s\S]*?---\s*/, '')
       return contentWithoutFrontmatter.trim()
     } else {
-      const yamlContent = fs.readFileSync(targetPath, 'utf8')
-      const data = yaml.load(yamlContent) as any
+      const data = yaml.load(content) as any
 
       // Navigate to the nested property
       const pathParts = dataPath.split('.')
@@ -642,93 +678,91 @@ function applyDataUpdates(
 ): string | null {
   const targetPath = getDataFilePath(type, dataPath)
 
-  // Check if file exists
-  if (!fs.existsSync(targetPath)) {
-    if (verbose) {
-      console.log(chalk.red(`  Error: Data file not found: ${targetPath}`))
-    }
-    return null
-  }
-
-  if (dryRun) {
-    if (verbose) {
-      console.log(chalk.blue(`  Would update: ${targetPath}`))
-      if (contents.length > 1) {
-        console.log(
-          chalk.yellow(
-            `    Warning: Multiple content blocks found for ${dataPath}, would use first one`,
-          ),
-        )
-      }
-      console.log(
-        chalk.dim(
-          `    New content: ${contents[0].substring(0, 100)}${contents[0].length > 100 ? '...' : ''}`,
-        ),
-      )
-    } else {
-      console.log(chalk.green(`  Updated: ${targetPath}`))
-    }
-    return targetPath // Return path even in dry run
-  }
-
   try {
-    if (type === 'reusable') {
-      // For reusables, replace entire file content
-      if (contents.length > 1) {
-        console.log(
-          chalk.yellow(`  Warning: Multiple content blocks found for ${dataPath}, using first one`),
-        )
-      }
-
-      // Preserve original file's newline behavior
-      const originalContent = fs.readFileSync(targetPath, 'utf8')
-      const hasTrailingNewline = originalContent.endsWith('\n')
-      const newContent =
-        hasTrailingNewline && !contents[0].endsWith('\n') ? `${contents[0]}\n` : contents[0]
-
-      fs.writeFileSync(targetPath, newContent)
-      if (verbose) {
-        console.log(chalk.green(`  Updated: ${type}s.${dataPath}`))
-      }
-    } else {
-      // For variables, update YAML structure
-      const yamlContent = fs.readFileSync(targetPath, 'utf8')
-      const data = yaml.load(yamlContent) as any
-
-      // Navigate to the nested property
-      const pathParts = dataPath.split('.')
-      const propertyPath = pathParts.slice(1) // Skip the file name
-
-      let current = data
-      for (let i = 0; i < propertyPath.length - 1; i++) {
-        if (!current[propertyPath[i]]) {
-          current[propertyPath[i]] = {}
+    return withDataFile(targetPath, !dryRun, (fd) => {
+      if (dryRun) {
+        if (verbose) {
+          console.log(chalk.blue(`  Would update: ${targetPath}`))
+          if (contents.length > 1) {
+            console.log(
+              chalk.yellow(
+                `    Warning: Multiple content blocks found for ${dataPath}, would use first one`,
+              ),
+            )
+          }
+          console.log(
+            chalk.dim(
+              `    New content: ${contents[0].substring(0, 100)}${contents[0].length > 100 ? '...' : ''}`,
+            ),
+          )
+        } else {
+          console.log(chalk.green(`  Updated: ${targetPath}`))
         }
-        current = current[propertyPath[i]]
+        return targetPath // Return path even in dry run
       }
 
-      // Update the final property
-      const finalKey = propertyPath[propertyPath.length - 1]
-      if (contents.length > 1) {
-        console.log(
-          chalk.yellow(`  Warning: Multiple content blocks found for ${dataPath}, using first one`),
-        )
-      }
-      current[finalKey] = contents[0]
+      if (type === 'reusable') {
+        // For reusables, replace entire file content
+        if (contents.length > 1) {
+          console.log(
+            chalk.yellow(
+              `  Warning: Multiple content blocks found for ${dataPath}, using first one`,
+            ),
+          )
+        }
 
-      // Preserve original file's newline behavior for YAML
-      const hasTrailingNewline = yamlContent.endsWith('\n')
-      const yamlOutput = yaml.dump(data)
-      const finalYaml =
-        hasTrailingNewline && !yamlOutput.endsWith('\n') ? `${yamlOutput}\n` : yamlOutput
+        // Preserve original file's newline behavior
+        const originalContent = fs.readFileSync(fd, 'utf8')
+        const hasTrailingNewline = originalContent.endsWith('\n')
+        const newContent =
+          hasTrailingNewline && !contents[0].endsWith('\n') ? `${contents[0]}\n` : contents[0]
 
-      // Write back to file
-      fs.writeFileSync(targetPath, finalYaml)
-      if (verbose) {
-        console.log(chalk.green(`  Updated: ${type}s.${dataPath}`))
+        replaceDataFileContent(fd, newContent)
+        if (verbose) {
+          console.log(chalk.green(`  Updated: ${type}s.${dataPath}`))
+        }
+      } else {
+        // For variables, update YAML structure
+        const yamlContent = fs.readFileSync(fd, 'utf8')
+        const data = yaml.load(yamlContent) as any
+
+        // Navigate to the nested property
+        const pathParts = dataPath.split('.')
+        const propertyPath = pathParts.slice(1) // Skip the file name
+
+        let current = data
+        for (let i = 0; i < propertyPath.length - 1; i++) {
+          if (!current[propertyPath[i]]) {
+            current[propertyPath[i]] = {}
+          }
+          current = current[propertyPath[i]]
+        }
+
+        // Update the final property
+        const finalKey = propertyPath[propertyPath.length - 1]
+        if (contents.length > 1) {
+          console.log(
+            chalk.yellow(
+              `  Warning: Multiple content blocks found for ${dataPath}, using first one`,
+            ),
+          )
+        }
+        current[finalKey] = contents[0]
+
+        // Preserve original file's newline behavior for YAML
+        const hasTrailingNewline = yamlContent.endsWith('\n')
+        const yamlOutput = yaml.dump(data)
+        const finalYaml =
+          hasTrailingNewline && !yamlOutput.endsWith('\n') ? `${yamlOutput}\n` : yamlOutput
+
+        // Write back to file
+        replaceDataFileContent(fd, finalYaml)
+        if (verbose) {
+          console.log(chalk.green(`  Updated: ${type}s.${dataPath}`))
+        }
       }
-    }
-    return targetPath
+      return targetPath
+    })
   } catch (error: any) {
     if (verbose) {
       console.log(chalk.red(`  Error updating ${type}s.${dataPath}: ${error.message}`))
@@ -798,15 +832,8 @@ async function resolveLiquidReference(
 async function resolveReusable(reusablePath: string, verbose?: boolean): Promise<string | null> {
   const filePath = getDataFilePath('reusable', reusablePath)
 
-  if (!fs.existsSync(filePath)) {
-    if (verbose) {
-      console.log(chalk.yellow(`  Reusable not found: ${reusablePath}`))
-    }
-    return null
-  }
-
   try {
-    const content = fs.readFileSync(filePath, 'utf-8')
+    const content = readDataFile(filePath)
     // Remove any frontmatter if present
     const contentWithoutFrontmatter = content.replace(/^---[\s\S]*?---\s*/, '')
     return contentWithoutFrontmatter.trim()
@@ -833,15 +860,8 @@ async function resolveVariable(variablePath: string, verbose?: boolean): Promise
 
   const filePath = getDataFilePath('variable', variablePath)
 
-  if (!fs.existsSync(filePath)) {
-    if (verbose) {
-      console.log(chalk.yellow(`  Variable file not found: ${filePath}`))
-    }
-    return null
-  }
-
   try {
-    const yamlContent = fs.readFileSync(filePath, 'utf-8')
+    const yamlContent = readDataFile(filePath)
     const data = yaml.load(yamlContent) as Record<string, any>
 
     // Navigate through the key path to find the value
