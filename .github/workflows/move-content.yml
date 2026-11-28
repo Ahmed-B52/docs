@@ -8,7 +8,11 @@ on:
   pull_request:
     paths:
       - src/content-render/scripts/move-content.ts
-      - src/content-render/scripts/test-move-content.ts
+      - src/content-render/scripts/content-paths.ts
+      - src/content-render/scripts/add-content-type.ts
+      - src/content-render/scripts/update-filepaths.ts
+      - src/content-render/scripts/test-content-paths.ts
+      - src/content-render/scripts/test-moved-content.ts
       - 'src/frame/lib/**/*.js'
       - .github/workflows/move-content.yml
       # In case any of the dependencies affect the script
@@ -36,6 +40,9 @@ jobs:
           # and `git commit ...`
           git config --global user.name "docs-bot"
           git config --global user.email "77750099+docs-bot@users.noreply.github.com"
+
+      - name: Check content path boundaries
+        run: node --import tsx --test src/content-render/scripts/test-content-paths.ts
 
       - name: Move hello-world.md to hello-wurld.md
         env:

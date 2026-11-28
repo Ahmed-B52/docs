@@ -9,7 +9,7 @@ import { program } from 'commander'
 import GithubSlugger from 'github-slugger'
 import { decode } from 'html-entities'
 import { execFileSync } from 'child_process'
-import walkFiles from '@/workflows/walk-files'
+import { readContentFile, walkContentFiles } from './content-paths'
 import frontmatter from '@/frame/lib/read-frontmatter'
 import { renderContent } from '@/content-render/index'
 import fpt from '@/versions/lib/non-enterprise-default-version'
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     try {
       slugger.reset()
 
-      const result = await processFile(file, slugger, options)
+      const result = await processFile(contentDir, file, slugger, options)
       if (!result) continue
 
       moveFile(result, options)
@@ -91,11 +91,12 @@ async function main(): Promise<void> {
 }
 
 async function processFile(
+  contentDir: string,
   file: string,
   slugger: GithubSlugger,
   scriptOptions: ScriptOptions,
 ): Promise<string[] | null> {
-  const { data } = frontmatter(fs.readFileSync(file, 'utf8')) as unknown as {
+  const { data } = frontmatter(readContentFile(contentDir, file)) as unknown as {
     data: PageFrontmatter
   }
 
@@ -212,7 +213,8 @@ function sortFiles(filesArray: string[]): string[] {
 }
 
 function filterFiles(contentDir: string, scriptOptions: ScriptOptions) {
-  return walkFiles(contentDir, ['.md']).filter((file: string) => {
+  return walkContentFiles(contentDir).filter((file) => {
+    if (!file.endsWith('.md')) return false
     // Never move readmes
     if (file.endsWith('README.md')) return false
     // Never move early access files

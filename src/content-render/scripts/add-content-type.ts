@@ -3,11 +3,15 @@
  * @description Auto-populate the `contentType` frontmatter property based on the directory location of the content file
  */
 
-import fs from 'fs'
 import path from 'path'
 import { program } from 'commander'
 import frontmatter from '@/frame/lib/read-frontmatter'
-import walkFiles from '@/workflows/walk-files'
+import {
+  assertContentPath,
+  readContentFile,
+  walkContentFiles,
+  writeContentFile,
+} from './content-paths'
 import { contentTypesEnum } from '@/frame/lib/frontmatter'
 import type { MarkdownFrontmatter } from '@/types'
 
@@ -46,26 +50,29 @@ Examples:
 
 const options: ScriptOptions = program.opts()
 
-const contentDir = path.join(process.cwd(), 'content')
+const contentDir = path.resolve(process.env.ROOT || '.', 'content')
 
 async function main() {
-  const filesToProcess: string[] = walkFiles(contentDir, ['.md']).filter((file: string) => {
-    if (file.endsWith('README.md')) return false
-    if (file.includes('early-access')) return false
-    if (!options.paths) return true
-    return options.paths.some((p: string) => {
-      // Allow either a full content path like "content/foo/bar.md"
-      // or a top-level directory name like "copilot"
-      if (!p.startsWith('content')) {
-        p = path.join('content', p)
-      }
-      if (!fs.existsSync(p)) {
-        console.error(`${p} not found`)
-        process.exit(1)
-      }
-      if (path.relative(process.cwd(), file).startsWith(p)) return true
-    })
+  const selectedPaths = options.paths?.map((input) => {
+    const target =
+      path.isAbsolute(input) || input === 'content' || input.startsWith('content/')
+        ? path.resolve(input)
+        : path.resolve(contentDir, input)
+    const stat = assertContentPath(contentDir, target)
+    return { target, directory: stat?.isDirectory() }
   })
+  const candidates = selectedPaths
+    ? [
+        ...new Set(
+          selectedPaths.flatMap(({ target, directory }) =>
+            directory ? walkContentFiles(contentDir, target) : [target],
+          ),
+        ),
+      ]
+    : walkContentFiles(contentDir)
+  const filesToProcess = candidates.filter(
+    (file) => file.endsWith('.md') && !file.endsWith('README.md') && !file.includes('early-access'),
+  )
 
   let processedCount = 0
   let updatedCount = 0
@@ -87,7 +94,7 @@ async function main() {
 }
 
 function processFile(filePath: string, scriptOptions: ScriptOptions) {
-  const fileContent = fs.readFileSync(filePath, 'utf8')
+  const fileContent = readContentFile(contentDir, filePath)
   const relativePath = path.relative(contentDir, filePath)
 
   const { data, content } = frontmatter(fileContent) as unknown as {
@@ -128,7 +135,8 @@ function processFile(filePath: string, scriptOptions: ScriptOptions) {
   }
 
   // Write the file back
-  fs.writeFileSync(
+  writeContentFile(
+    contentDir,
     filePath,
     frontmatter.stringify(
       content,
