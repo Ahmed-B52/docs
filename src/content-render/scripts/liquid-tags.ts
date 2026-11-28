@@ -6,6 +6,8 @@
 // Usage: npm run liquid-tags -- restore --paths content/pull-requests/about.md
 
 import { Command } from 'commander'
+import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import fs from 'fs'
 import path from 'path'
 import yaml from 'js-yaml'
@@ -35,6 +37,8 @@ const ROOT = process.env.ROOT || '.'
 const DATA_ROOT = path.resolve(path.join(ROOT, 'data'))
 const REUSABLES_ROOT = path.join(DATA_ROOT, 'reusables')
 const VARIABLES_ROOT = path.join(DATA_ROOT, 'variables')
+
+const MAX_EXPANSION_DEPTH = 10
 
 // Regex pattern to match expanded content blocks
 const EXPANDED_PATTERN = /<!-- begin (reusable|variable)s\.([^>]+) -->(.+?)<!-- end \1s\.\2 -->/gs
@@ -128,7 +132,9 @@ program
   .option('--variables-only', 'Process only variables (skip reusables)', false)
   .action((options: ExpandOptions) => restoreReferences(options))
 
-program.parse()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  program.parse()
+}
 
 /**
  * Get allowed types based on command options
@@ -164,7 +170,7 @@ async function expandReferences(options: ExpandOptions): Promise<void> {
   const withMarkers = markers !== false
   const recursive = !shallow // Recursive by default unless --shallow is specified
   const allowedTypes = getAllowedTypes(options)
-  const maxIterations = 10 // Safety limit for recursive expansion
+  const maxIterations = MAX_EXPANSION_DEPTH
 
   if (paths.length === 0) {
     console.error(chalk.red('Error: No paths provided. Use --paths option.'))
@@ -196,10 +202,9 @@ async function expandReferences(options: ExpandOptions): Promise<void> {
         const content = fs.readFileSync(filePath, 'utf-8')
         const expandedContent = await expandFileContent(
           content,
-          filePath,
           verbose,
-          withMarkers,
           allowedTypes,
+          withMarkers ? markExpandedReference : undefined,
         )
 
         if (expandedContent !== content) {
@@ -362,10 +367,9 @@ async function restoreReferences(options: ExpandOptions): Promise<void> {
  */
 async function expandFileContent(
   content: string,
-  filePath: string,
   verbose?: boolean,
-  withMarkers?: boolean,
   allowedTypes?: Array<'reusable' | 'variable'>,
+  formatReference?: (ref: LiquidReference, value: string) => string | Promise<string>,
 ): Promise<string> {
   const references = findLiquidReferences(content, allowedTypes)
 
@@ -381,16 +385,9 @@ async function expandFileContent(
       const resolvedValue = await resolveLiquidReference(ref, verbose)
 
       if (resolvedValue !== null) {
-        const originalText = ref.original
-        let replacement: string
-
-        if (withMarkers) {
-          const commentStart = `<!-- begin ${ref.type}s.${ref.path} -->`
-          const commentEnd = `<!-- end ${ref.type}s.${ref.path} -->`
-          replacement = `${commentStart}${resolvedValue}${commentEnd}`
-        } else {
-          replacement = resolvedValue
-        }
+        const replacement = formatReference
+          ? await formatReference(ref, resolvedValue)
+          : resolvedValue
 
         const startPos = ref.startIndex + offset
         const endPos = ref.endIndex + offset
@@ -398,7 +395,7 @@ async function expandFileContent(
         expandedContent =
           expandedContent.substring(0, startPos) + replacement + expandedContent.substring(endPos)
 
-        offset += replacement.length - originalText.length
+        offset += replacement.length - ref.original.length
 
         if (verbose) {
           console.log(chalk.green(`  Expanded: ${ref.type}s.${ref.path}`))
@@ -418,6 +415,48 @@ async function expandFileContent(
   // Note: Remaining reference detection is now handled in expandReferences function for recursive mode
 
   return expandedContent
+}
+
+function markExpandedReference(ref: LiquidReference, value: string): string {
+  const label = `${ref.type}s.${ref.path}`
+  return `<!-- begin ${label} -->${value}<!-- end ${label} -->`
+}
+
+/**
+ * Expand for an editor that may only change the selected document. Only restore
+ * marker pairs issued by this expansion, and discard edits inside those pairs.
+ */
+export async function expandLiquidForEditing(content: string, verbose?: boolean) {
+  const session = `liquid-${randomUUID()}`
+  const originals: string[] = []
+
+  async function expandNested(value: string, depth: number): Promise<string> {
+    if (!depth) return value
+    return expandFileContent(value, verbose, undefined, (_, nested) =>
+      expandNested(nested, depth - 1),
+    )
+  }
+
+  const expanded = await expandFileContent(content, verbose, undefined, async (ref, value) => {
+    const id = `${session}-${originals.push(ref.original) - 1}`
+    const visible = await expandNested(value, MAX_EXPANSION_DEPTH - 1)
+    return `<!-- begin ${id} -->${visible}<!-- end ${id} -->`
+  })
+
+  return {
+    expanded,
+    restore(answer: string): string {
+      const pairs = new RegExp(
+        `<!-- begin ${session}-(0|[1-9]\\d*) -->(?:(?!${session})[\\s\\S])*?<!-- end ${session}-\\1 -->`,
+        'g',
+      )
+      const restored = answer.replace(pairs, (match, id) => originals[Number(id)] ?? match)
+      if (restored.includes(session)) {
+        throw new Error('The editor returned incomplete or invalid Liquid markers')
+      }
+      return restored
+    },
+  }
 }
 
 /**

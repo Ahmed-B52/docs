@@ -5,6 +5,8 @@ messages:
   - role: user
     content: >-
       Review this content file according to the provided system prompt.
+      If returning edited Markdown, preserve the complete Liquid comment pairs and their
+      enclosed text for references that remain in the document.
       {{input}}
 model: openai/gpt-4o # Reliable model that works
 temperature: 0.3 # Lower temperature for consistent results
