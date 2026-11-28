@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import { post } from '@/tests/helpers/e2etest'
 import { contentTypesEnum } from '@/frame/lib/frontmatter'
+import { MAX_VALIDATION_DIAGNOSTICS } from '../lib/middleware-errors'
 
 describe('POST /events', () => {
   vi.setConfig({ testTimeout: 60 * 1000 })
@@ -163,6 +164,31 @@ describe('POST /events', () => {
       },
     })
     expect(statusCode).toBe(400)
+  })
+
+  test('should emit one diagnostic for a rejected event with multiple validation errors', async () => {
+    const res = await checkEvent({
+      ...pageExample,
+      context: { ...pageExample.context, extraOne: true, extraTwo: true },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toMatchObject({
+      failure_count: 1,
+      details: [{ value: { keyword: 'additionalProperties' } }],
+    })
+  })
+
+  test('should cap diagnostics for a batch and still process valid events', async () => {
+    const rejected = Array.from({ length: MAX_VALIDATION_DIAGNOSTICS + 2 }, (_, i) => ({
+      ...pageExample,
+      [`unexpectedBatchField${i}`]: true,
+    }))
+    const res = await checkEvent([...rejected, pageExample])
+    expect(res.statusCode).toBe(400)
+    const result = JSON.parse(res.body)
+    expect(result.success_count).toBe(1)
+    expect(result.failure_count).toBe(MAX_VALIDATION_DIAGNOSTICS)
+    expect(result.details).toHaveLength(MAX_VALIDATION_DIAGNOSTICS)
   })
 
   test('should accept content_type field', async () => {
