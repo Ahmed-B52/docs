@@ -1,4 +1,4 @@
-import matter from '@gr2m/gray-matter'
+import parseFrontmatter from '@/frame/lib/parse-frontmatter'
 import type { SchemaObject, ErrorObject } from 'ajv'
 
 import { validateJson } from '@/tests/lib/validate-json-schema'
@@ -23,7 +23,7 @@ function readFrontmatter(markdown: string, opts: ReadFrontmatterOptions = {}) {
   let data
 
   try {
-    ;({ content, data } = matter(markdown))
+    ;({ content, data } = parseFrontmatter(markdown))
   } catch (e: unknown) {
     const defaultReason = 'invalid frontmatter entry'
 
@@ -96,10 +96,6 @@ function readFrontmatter(markdown: string, opts: ReadFrontmatterOptions = {}) {
   return { content, data, errors }
 }
 
-// Expose gray-matter's underlying stringify method for joining a parsed
-// frontmatter object and a markdown string back into a unified string
-//
-// stringify('some string', {some: 'frontmatter'})
-readFrontmatter.stringify = matter.stringify
+readFrontmatter.stringify = parseFrontmatter.stringify
 
 export default readFrontmatter

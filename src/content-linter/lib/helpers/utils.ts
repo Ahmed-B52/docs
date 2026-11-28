@@ -1,5 +1,5 @@
 import { addError, filterTokens } from 'markdownlint-rule-helpers'
-import matter from '@gr2m/gray-matter'
+import parseFrontmatter from '@/frame/lib/parse-frontmatter'
 
 import type { RuleParams, RuleErrorCallback, MarkdownToken } from '@/content-linter/types'
 
@@ -147,7 +147,7 @@ export const docsDomains = ['docs.github.com', 'help.github.com', 'developer.git
 // Returns frontmatter as a Record with unknown values since YAML can contain various types
 export function getFrontmatter(lines: string[]): Record<string, unknown> | null {
   const fmString = lines.join('\n')
-  const { data } = matter(fmString)
+  const { data } = parseFrontmatter(fmString)
   // If there is no frontmatter or the frontmatter contains
   // no keys, matter will return an empty object.
   if (Object.keys(data).length === 0) return null

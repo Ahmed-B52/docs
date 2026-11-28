@@ -1,6 +1,6 @@
 import type { Context, Page } from '@/types'
 import { renderContent } from '@/content-render/index'
-import matter from '@gr2m/gray-matter'
+import parseFrontmatter from '@/frame/lib/parse-frontmatter'
 
 /**
  * Extract manual content from page markdown
@@ -15,7 +15,7 @@ export async function extractManualContent(page: Page, context: Context): Promis
 
   if (markerIndex <= 0) return ''
 
-  const { content } = matter(page.markdown)
+  const { content } = parseFrontmatter(page.markdown)
   const manualContentMarkerIndex = content.indexOf(
     '<!-- Content after this section is automatically generated -->',
   )

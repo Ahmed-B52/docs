@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs'
-import matter from '@gr2m/gray-matter'
+import parseFrontmatter from '@/frame/lib/parse-frontmatter'
 
 // Filters out files from a list of filePaths
 // that have a contentType property in their frontmatter
@@ -7,7 +7,7 @@ import matter from '@gr2m/gray-matter'
 export function checkContentType(filePaths: string[], contentType: string) {
   const unallowedChangedFiles = []
   for (const filePath of filePaths) {
-    const { data } = matter(readFileSync(filePath, 'utf8'))
+    const { data } = parseFrontmatter(readFileSync(filePath, 'utf8'))
     if (data.contentType === contentType) {
       unallowedChangedFiles.push(filePath)
     }
