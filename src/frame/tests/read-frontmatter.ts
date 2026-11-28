@@ -29,8 +29,35 @@ describe('frontmatter', () => {
   })
 
   describe('frontmatter.stringify', () => {
-    test('is exported', () => {
-      expect(typeof parse.stringify).toBe('function')
+    test.each(['---\ntitle: Literal body\n---\nText', '---javascript\nLiteral body\n---'])(
+      'preserves a body that starts with frontmatter-like text: %j',
+      (body) => {
+        const data = { title: 'Article', intro: 'A long line '.repeat(10).trimEnd() }
+        const document = parse.stringify(body, data, { lineWidth: -1 })
+        expect(document).toContain(`intro: ${data.intro}\n`)
+        expect(parse(document)).toEqual({ data, content: body, errors: [] })
+      },
+    )
+  })
+
+  describe('frontmatter languages', () => {
+    test.each(['javascript', ' \tJS ', 'json', 'unknown'])('rejects the %j selector', (name) => {
+      const { data, errors } = parse(`\ufeff---${name}\r\n# Empty metadata\r\n---\r\nBody`, {
+        filepath,
+      })
+      expect(data).toBeUndefined()
+      expect(errors).toEqual([
+        { filepath, message: 'YML parsing error!', reason: 'invalid frontmatter entry' },
+      ])
+    })
+
+    test('accepts explicitly selected YAML with a BOM and CRLF', () => {
+      const source = '\ufeff--- yml\r\ntitle: Example\r\n---\r\nBody\r\n'
+      expect(parse(source)).toEqual({
+        data: { title: 'Example' },
+        content: 'Body\r\n',
+        errors: [],
+      })
     })
   })
 
