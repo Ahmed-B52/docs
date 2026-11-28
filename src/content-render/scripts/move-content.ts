@@ -27,11 +27,11 @@ import { execFileSync } from 'child_process'
 
 import { program } from 'commander'
 import chalk from 'chalk'
-import walk from 'walk-sync'
 import escapeStringRegexp from 'escape-string-regexp'
 
 import fm from '@/frame/lib/frontmatter'
 import readFrontmatter from '@/frame/lib/read-frontmatter'
+import { walkRegularFiles } from '@/workflows/walk-files'
 
 // Type definitions
 interface MoveOptions {
@@ -263,9 +263,8 @@ function splitDirectory(directory: string) {
 function findFilesInFolder(oldPath: string, newPath: string, opts: MoveOptions): FileTuple[] {
   const { undo, verbose } = opts
   const files: FileTuple[] = []
-  const allFiles = walk(oldPath, { includeBasePath: true, directories: false })
-  for (const filePath of allFiles) {
-    const newFilePath = filePath.replace(oldPath, newPath)
+  for (const filePath of walkRegularFiles(oldPath)) {
+    const newFilePath = path.join(newPath, path.relative(oldPath, filePath))
     const oldHref = makeHref(CONTENT_ROOT, undo ? newFilePath : filePath)
     const newHref = makeHref(CONTENT_ROOT, undo ? filePath : newFilePath)
     files.push([filePath, newFilePath, oldHref, newHref])
@@ -601,15 +600,10 @@ function changeHomepageLinks(oldHref: string, newHref: string, verbose: boolean)
 }
 
 function changeFeaturedLinks(oldHref: string, newHref: string): void {
-  const allFiles = walk(CONTENT_ROOT, {
-    globs: ['**/*.md'],
-    includeBasePath: true,
-    directories: false,
-  }).filter((file) => !file.includes('README.md'))
-
   const regex = new RegExp(`(^|%} )${escapeStringRegexp(oldHref)}($| {%)`)
 
-  for (const file of allFiles) {
+  for (const file of walkRegularFiles(CONTENT_ROOT, false)) {
+    if (!file.endsWith('.md') || file.includes('README.md')) continue
     let changed = false
     const fileContent = fs.readFileSync(file, 'utf-8')
     const { content, data } = readFrontmatter(fileContent)

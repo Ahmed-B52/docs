@@ -6,6 +6,24 @@
 
 import walk from 'walk-sync'
 import fs from 'fs'
+import { join } from 'path'
+
+export function* walkRegularFiles(basePath: string, includeHidden = true): Generator<string> {
+  const directories = [basePath]
+  while (directories.length > 0) {
+    const directory = directories.pop()!
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!includeHidden && entry.name.startsWith('.')) continue
+      const entryPath = join(directory, entry.name)
+      // Dirent types describe the entry itself, so symlinks are neither directories nor files here.
+      if (entry.isDirectory()) {
+        directories.push(entryPath)
+      } else if (entry.isFile()) {
+        yield entryPath
+      }
+    }
+  }
+}
 
 export default function walkFiles(
   dir: string,
