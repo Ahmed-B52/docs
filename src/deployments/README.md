@@ -16,7 +16,7 @@ This subject is responsible for:
 ### Key capabilities and their locations
 
 - `production/build-scripts/fetch-repos.sh` - Main script that orchestrates fetching docs-early-access and all translation repos during Docker build
-- `production/build-scripts/clone-or-use-cached-repo.sh` - Utility function to clone repos or use cached versions
+- `production/build-scripts/clone-content-repo.sh` - Clones content repos without retaining Git metadata
 - `production/build-scripts/merge-early-access.sh` - Merges early-access content into production content
 - `Dockerfile` (root) - Multi-stage Docker build for production deployments
 - `.github/workflows/moda-ci.yaml` - CI/CD workflow that builds and deploys via Moda

@@ -142,6 +142,8 @@ export default function index(app: Express) {
   // This must come before the express.static('assets') middleware.
   app.use(assetPreprocessing)
 
+  // Express follows filesystem links. The production early access import
+  // rejects them before publishing files under this static root.
   app.use(
     '/assets/',
     express.static('assets', {

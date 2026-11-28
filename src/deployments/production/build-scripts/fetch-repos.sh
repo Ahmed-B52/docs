@@ -12,8 +12,8 @@ echo "Fetching and resolving early-access, and translations repos"
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# Import the clone_or_use_cached_repo function
-. ./build-scripts/clone-or-use-cached-repo.sh
+# Import the clone_content_repo function
+. ./build-scripts/clone-content-repo.sh
 
 # Set the GITHUB_TOKEN environment variable from the mounted --secret passed to Docker build
 GITHUB_TOKEN=$(cat /run/secrets/DOCS_BOT_PAT_BASE)
@@ -22,7 +22,7 @@ GITHUB_TOKEN=$(cat /run/secrets/DOCS_BOT_PAT_BASE)
 # Early access
 # - - - - - - - - - -
 echo "Fetching early access..."
-clone_or_use_cached_repo "docs-early-access" "docs-early-access" "main"
+clone_content_repo "docs-early-access" "docs-early-access" "main"
 echo "Merging early access..."
 . ./build-scripts/merge-early-access.sh
 
@@ -38,7 +38,7 @@ set +e
 
 pids=""
 for lang in es-es ja-jp pt-br zh-cn ru-ru fr-fr ko-kr de-de; do
-  clone_or_use_cached_repo "$lang" "docs-internal.$lang" "main" &
+  clone_content_repo "$lang" "docs-internal.$lang" "main" &
   pids="$pids $!"
 done
 
